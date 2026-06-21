@@ -248,7 +248,9 @@ def run():
             if r:
                 writer.writerow(r)
         csv_b64 = base64.b64encode(buf.getvalue().encode()).decode()
-        out_filename = f"{filename}_enriched.csv"
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_filename = f"{filename}_enriched_{ts}.csv"
 
         # collect per-row error details for the frontend summary panel
         error_details = []
