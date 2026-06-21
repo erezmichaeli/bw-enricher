@@ -484,6 +484,13 @@ select{cursor:pointer}
             <div style="font-size:11px;color:#64748b;margin-bottom:6px">Available fields — click to add:</div>
             <div class="field-chips" id="field-chips"></div>
           </div>
+          <div id="id-search-hint" style="display:none;padding:9px 12px;border-radius:8px;
+            background:#fffbeb;border:1px solid #fde68a;font-size:11px;color:#92400e;margin-bottom:10px">
+            <b>💡 identifier-search tip:</b> For <b>equities/companies</b> map <code>company_id</code> → your ID column.
+            For <b>funds/ETFs</b> map <code>fund_id</code> → your ID column.
+            The enricher picks the <b>primary</b> result automatically — no need to handle duplicates.
+            If an identifier isn't in BW, that row is skipped with a clear error.
+          </div>
           <table class="output-table">
             <thead><tr>
               <th>API field path</th>
@@ -1089,6 +1096,9 @@ function selectEndpoint(path, conf) {
   event.currentTarget.classList.add('selected');
   const existing = S.editingIdx !== null ? S.pipeline[S.editingIdx] : null;
   renderParamsAndOutputs(path, conf, existing?.url_template === path ? existing : null);
+  // show identifier-search hint when relevant
+  const hint = q('#id-search-hint');
+  if (hint) hint.style.display = path.includes('identifier-search') ? 'block' : 'none';
 }
 
 function renderParamsAndOutputs(path, conf, existing) {
@@ -1459,12 +1469,14 @@ function handleSSE(evt, total) {
       const title = q('#error-summary-title');
       const body  = q('#error-summary-body');
       title.textContent = `⚠️ ${evt.errors} row${evt.errors>1?'s':''} had errors — expand to review`;
-      body.innerHTML = evt.error_details.map(e =>
-        `<div style="padding:3px 0;border-bottom:1px solid rgba(220,38,38,.1)">
+      body.innerHTML = evt.error_details.map(e => {
+        const debug = e.debug ? `<div style="color:#92400e;font-size:10px;margin-top:3px;padding-left:8px;border-left:2px solid #fde68a">${e.debug.replace(/\|/g,'<br>')}</div>` : '';
+        return `<div style="padding:5px 0;border-bottom:1px solid rgba(220,38,38,.1)">
           <span style="color:#dc2626;font-weight:600">Row ${e.row}:</span>
           <span style="color:#7f1d1d"> ${e.error}</span>
-        </div>`
-      ).join('');
+          ${debug}
+        </div>`;
+      }).join('');
       panel.style.display = 'block';
     }
   } else if (evt.type === 'error') {

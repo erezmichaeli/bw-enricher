@@ -54,22 +54,48 @@ def extract(payload, path):
             return ""
     return json.dumps(val) if isinstance(val, (dict, list)) else val
 
+def is_identifier_search(url_template):
+    """identifier-search is special: returns an array but we want the first
+    matching result's scalar fields, not fan-out columns."""
+    return "identifier-search" in url_template
+
+def extract_first_match(data, j_key):
+    """For identifier-search arrays: walk items and return the first
+    non-empty value found for j_key. Prefers primary_flag=True items."""
+    if not isinstance(data, list):
+        return extract(data, j_key)
+    # prefer primary item
+    primary = next((i for i in data if isinstance(i, dict) and i.get("primary_flag")), None)
+    candidates = ([primary] if primary else []) + [i for i in data if i != primary and isinstance(i, dict)]
+    for item in candidates:
+        val = extract(item, j_key)
+        if val not in ("", None):
+            return val
+    return ""
+
 def process_row(row, steps, base_url, token):
     row = dict(row)
     row.setdefault("enricher_error", "")
+    row.setdefault("_debug_log", [])   # per-row debug trace
     hdrs = bw_headers(token)
 
     for idx, step in enumerate(steps):
         label = step.get("name", f"Step {idx+1}")
+        is_id_search = is_identifier_search(step.get("url_template", ""))
         try:
             url_tpl = step["url_template"]
             skip = False
 
-            # path params
+            # ── path params ──────────────────────────────────────────────
             for p, conf in step.get("path_map", {}).items():
                 val = resolve(conf, row)
                 if val is None:
-                    row["enricher_error"] += f"[{label}: missing path {p}] "
+                    # Give a clear diagnostic: what column was expected, what it resolved to
+                    src_col = conf.get("value", "?") if conf else "?"
+                    actual  = row.get(src_col, "<column missing>") if conf and conf.get("type") == "csv" else None
+                    detail  = f"column '{src_col}' = '{actual}'" if actual is not None else f"static value was empty"
+                    row["enricher_error"] += f"[{label}: missing path '{p}' ({detail})] "
+                    row["_debug_log"].append(f"Step {idx+1} '{label}': SKIP — path param '{p}' empty. {detail}")
                     skip = True; break
                 url_tpl = url_tpl.replace(f"{{{p}}}", val)
             if skip:
@@ -78,17 +104,23 @@ def process_row(row, steps, base_url, token):
             full_url = base_url.rstrip("/") + "/" + url_tpl.lstrip("/")
             params = {}
 
-            # query params
+            # ── query params ─────────────────────────────────────────────
             for q, conf in step.get("query_map", {}).items():
                 val = resolve(conf, row)
                 req = step.get("required_params", {}).get(q, False)
                 if val is None and req:
-                    row["enricher_error"] += f"[{label}: missing query {q}] "
+                    src_col = conf.get("value", "?") if conf else "?"
+                    actual  = row.get(src_col, "<column missing>") if conf and conf.get("type") == "csv" else None
+                    detail  = f"column '{src_col}' = '{actual}'" if actual is not None else "empty"
+                    row["enricher_error"] += f"[{label}: missing required query '{q}' ({detail})] "
+                    row["_debug_log"].append(f"Step {idx+1} '{label}': SKIP — query param '{q}' empty. {detail}")
                     skip = True; break
                 if val is not None:
                     params[q] = val
             if skip:
                 continue
+
+            row["_debug_log"].append(f"Step {idx+1} '{label}': GET {full_url} params={list(params.keys())}")
 
             resp = fetch_with_retry(full_url, hdrs, params)
             if resp and resp.status_code == 200:
@@ -97,14 +129,31 @@ def process_row(row, steps, base_url, token):
                 except Exception:
                     data = {}
 
-                for out in step.get("output_map", []):
-                    j_key = (out.get("json_field") or "").strip()
-                    c_col = (out.get("csv_column") or "").strip()
-                    if not j_key or not c_col:
-                        continue
+                # ── identifier-search: first-match extraction ─────────────
+                if is_id_search:
+                    if not data or (isinstance(data, list) and len(data) == 0):
+                        row["enricher_error"] += f"[{label}: identifier not found in BW] "
+                        row["_debug_log"].append(f"  → identifier-search returned empty — identifier not in BW")
+                    else:
+                        for out in step.get("output_map", []):
+                            j_key = (out.get("json_field") or "").strip()
+                            c_col = (out.get("csv_column") or "").strip()
+                            if not j_key or not c_col:
+                                continue
+                            val = extract_first_match(data, j_key)
+                            row[c_col] = val
+                            row["_debug_log"].append(f"  → identifier-search: '{j_key}' = '{val}' → col '{c_col}'")
+                            if not val:
+                                row["enricher_error"] += f"[{label}: field '{j_key}' empty in identifier-search result — check if correct field (fund_id vs company_id)] "
 
-                    # Array root → fan out into year_Q# columns
-                    if isinstance(data, list):
+                # ── time-series array: fan out into year_Q# columns ───────
+                elif isinstance(data, list) and data and isinstance(data[0], dict) and (
+                    "year" in data[0] or "quarter" in data[0]):
+                    for out in step.get("output_map", []):
+                        j_key = (out.get("json_field") or "").strip()
+                        c_col = (out.get("csv_column") or "").strip()
+                        if not j_key or not c_col:
+                            continue
                         for item in data:
                             if not isinstance(item, dict):
                                 continue
@@ -117,8 +166,20 @@ def process_row(row, steps, base_url, token):
                             else:
                                 suffix = str(data.index(item))
                             row[f"{c_col}_{suffix}"] = extract(item, j_key)
-                    else:
-                        row[c_col] = extract(data, j_key)
+
+                # ── single object ─────────────────────────────────────────
+                else:
+                    # if it's a plain list (not time-series), take first item
+                    payload = data[0] if isinstance(data, list) and data else data
+                    for out in step.get("output_map", []):
+                        j_key = (out.get("json_field") or "").strip()
+                        c_col = (out.get("csv_column") or "").strip()
+                        if not j_key or not c_col:
+                            continue
+                        val = extract(payload, j_key)
+                        row[c_col] = val
+                        row["_debug_log"].append(f"  → '{j_key}' = '{str(val)[:60]}' → col '{c_col}'")
+
             else:
                 code = resp.status_code if resp else "Timeout"
                 msg = ""
@@ -129,8 +190,17 @@ def process_row(row, steps, base_url, token):
                     except Exception:
                         msg = resp.text[:120]
                 row["enricher_error"] += f"[{label}: HTTP {code} {msg}] "
+                row["_debug_log"].append(f"Step {idx+1} '{label}': HTTP {code} {msg}")
+
         except Exception as e:
             row["enricher_error"] += f"[{label}: {e}] "
+            row["_debug_log"].append(f"Step {idx+1} '{label}': EXCEPTION {e}")
+
+    # expose debug log as a readable string column (only if there were errors)
+    if row.get("enricher_error"):
+        row["_debug_log"] = " | ".join(row["_debug_log"])
+    else:
+        del row["_debug_log"]   # clean column — don't add noise to successful rows
     return row
 
 # ── routes ───────────────────────────────────────────────────────────────────
@@ -242,7 +312,9 @@ def run():
 
         # Build output CSV
         buf = io.StringIO()
-        writer = csv.DictWriter(buf, fieldnames=out_cols, extrasaction="ignore")
+        # exclude internal debug column from output CSV
+        csv_cols = [c for c in out_cols if c != "_debug_log"]
+        writer = csv.DictWriter(buf, fieldnames=csv_cols, extrasaction="ignore")
         writer.writeheader()
         for r in result_rows:
             if r:
@@ -252,11 +324,15 @@ def run():
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         out_filename = f"{filename}_enriched_{ts}.csv"
 
-        # collect per-row error details for the frontend summary panel
+        # collect per-row error details + debug log for the frontend summary panel
         error_details = []
         for i, r in enumerate(result_rows):
             if r and r.get("enricher_error","").strip():
-                error_details.append({"row": i+1, "error": r["enricher_error"].strip()})
+                error_details.append({
+                    "row": i+1,
+                    "error": r["enricher_error"].strip(),
+                    "debug": r.get("_debug_log", ""),
+                })
 
         yield f"data: {json.dumps({'type':'done','csv_b64':csv_b64,'filename':out_filename,'errors':errors,'error_details':error_details})}\n\n"
 
