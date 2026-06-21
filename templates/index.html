@@ -1,0 +1,1450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Bridgewise Bulk Enricher</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<style>
+/* ── reset & tokens ───────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --ink:#0a0f1e; --ink2:#1e2740; --ink3:#374151;
+  --surface:#f4f6fb; --panel:#ffffff;
+  --accent:#2563eb; --accent2:#7c3aed;
+  --success:#059669; --warn:#d97706; --danger:#dc2626;
+  --border:#e2e8f0; --border2:#cbd5e1;
+  --mono:'JetBrains Mono',monospace;
+  --sans:'Inter',sans-serif;
+  --sidebar:272px;
+}
+html,body{height:100%;font-family:var(--sans);background:var(--surface);color:var(--ink3);font-size:14px}
+
+/* ── layout ───────────────────────────────────────────────── */
+#app{display:flex;height:100vh;overflow:hidden}
+
+/* sidebar */
+#sidebar{
+  width:var(--sidebar);flex-shrink:0;
+  background:var(--ink);color:#e2e8f0;
+  display:flex;flex-direction:column;
+  overflow-y:auto;overflow-x:hidden;
+  border-right:1px solid rgba(255,255,255,0.06);
+}
+#sidebar::-webkit-scrollbar{width:4px}
+#sidebar::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.1);border-radius:2px}
+
+.sb-logo{
+  padding:20px 20px 16px;
+  border-bottom:1px solid rgba(255,255,255,0.07);
+}
+.sb-logo .badge{
+  display:inline-flex;align-items:center;gap:6px;
+  font-size:10px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;
+  color:#94a3b8;margin-bottom:8px;
+}
+.sb-logo .dot{width:7px;height:7px;border-radius:50%;background:#22c55e;
+  box-shadow:0 0 0 4px rgba(34,197,94,.2)}
+.sb-logo h1{font-size:15px;font-weight:800;color:#f1f5f9;letter-spacing:-.3px}
+.sb-logo p{font-size:11px;color:#64748b;margin-top:3px}
+
+.sb-section{padding:16px 20px}
+.sb-section+.sb-section{border-top:1px solid rgba(255,255,255,0.06)}
+.sb-label{font-size:10px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  color:#475569;margin-bottom:10px}
+
+/* token input */
+.token-wrap{position:relative}
+.token-wrap input{
+  width:100%;padding:9px 36px 9px 10px;
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.1);
+  border-radius:8px;color:#e2e8f0;font-family:var(--mono);font-size:11px;
+  outline:none;transition:border .15s;
+}
+.token-wrap input:focus{border-color:var(--accent)}
+.token-wrap input::placeholder{color:#475569}
+.token-status{
+  position:absolute;right:9px;top:50%;transform:translateY(-50%);
+  font-size:12px;
+}
+
+/* env pills */
+.env-pills{display:flex;gap:6px;flex-wrap:wrap}
+.env-pill{
+  padding:5px 12px;border-radius:999px;font-size:11px;font-weight:600;
+  border:1px solid rgba(255,255,255,.1);color:#94a3b8;background:transparent;
+  cursor:pointer;transition:all .15s;
+}
+.env-pill.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.env-pill:hover:not(.active){background:rgba(255,255,255,.07);color:#e2e8f0}
+
+/* pipeline list in sidebar */
+#sb-pipeline{flex:1;min-height:0;display:flex;flex-direction:column}
+.sb-steps{flex:1;overflow-y:auto;padding:0 20px 8px}
+.sb-steps::-webkit-scrollbar{width:3px}
+.sb-steps::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1)}
+.sb-step{
+  padding:10px 12px;border-radius:8px;
+  background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);
+  margin-bottom:6px;cursor:pointer;transition:background .15s;
+  position:relative;
+}
+.sb-step:hover{background:rgba(255,255,255,.08)}
+.sb-step.active{background:rgba(37,99,235,.2);border-color:rgba(37,99,235,.4)}
+.sb-step-name{font-size:12px;font-weight:600;color:#e2e8f0;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:40px}
+.sb-step-url{font-family:var(--mono);font-size:10px;color:#64748b;margin-top:2px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb-step-actions{
+  position:absolute;right:8px;top:50%;transform:translateY(-50%);
+  display:flex;gap:2px;opacity:0;transition:opacity .15s;
+}
+.sb-step:hover .sb-step-actions{opacity:1}
+.sb-step-btn{
+  width:22px;height:22px;border:none;border-radius:5px;cursor:pointer;
+  background:rgba(255,255,255,.08);color:#94a3b8;font-size:11px;
+  display:flex;align-items:center;justify-content:center;transition:background .15s;
+}
+.sb-step-btn:hover{background:rgba(255,255,255,.16);color:#e2e8f0}
+.sb-step-btn.del:hover{background:rgba(220,38,38,.3);color:#fca5a5}
+
+.sb-add-btn{
+  margin:8px 20px 16px;padding:9px;border-radius:8px;
+  background:rgba(37,99,235,.15);border:1px dashed rgba(37,99,235,.35);
+  color:#60a5fa;font-size:12px;font-weight:600;cursor:pointer;
+  text-align:center;transition:all .15s;
+}
+.sb-add-btn:hover{background:rgba(37,99,235,.25);border-style:solid}
+
+/* concurrency */
+.conc-row{display:flex;align-items:center;gap:10px;margin-top:4px}
+.conc-row input[type=range]{flex:1;accent-color:var(--accent)}
+.conc-val{font-family:var(--mono);font-size:12px;color:#e2e8f0;
+  background:rgba(255,255,255,.07);padding:2px 8px;border-radius:4px;min-width:28px;text-align:center}
+
+/* reset */
+.sb-reset{
+  margin:8px 20px 16px;padding:9px;border-radius:8px;
+  background:rgba(220,38,38,.1);border:1px solid rgba(220,38,38,.2);
+  color:#fca5a5;font-size:11px;font-weight:600;cursor:pointer;
+  text-align:center;transition:all .15s;
+}
+.sb-reset:hover{background:rgba(220,38,38,.2)}
+
+/* ── main area ────────────────────────────────────────────── */
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+/* tabs */
+#tabs{
+  display:flex;gap:4px;padding:16px 24px 0;
+  border-bottom:1px solid var(--border);background:var(--panel);
+  flex-shrink:0;
+}
+.tab{
+  padding:10px 20px;border-radius:8px 8px 0 0;font-size:13px;font-weight:600;
+  color:#64748b;cursor:pointer;border:1px solid transparent;border-bottom:none;
+  background:transparent;transition:all .15s;position:relative;bottom:-1px;
+}
+.tab.active{
+  background:var(--surface);color:var(--ink);
+  border-color:var(--border);border-bottom-color:var(--surface);
+}
+.tab:hover:not(.active){color:var(--ink3);background:rgba(0,0,0,.03)}
+
+/* panels */
+#panels{flex:1;overflow-y:auto;padding:24px}
+#panels::-webkit-scrollbar{width:6px}
+#panels::-webkit-scrollbar-thumb{background:var(--border2);border-radius:3px}
+.panel{display:none}
+.panel.active{display:block}
+
+/* ── shared components ────────────────────────────────────── */
+.card{
+  background:var(--panel);border:1px solid var(--border);border-radius:14px;
+  padding:22px;margin-bottom:20px;
+  box-shadow:0 1px 3px rgba(0,0,0,.04);
+}
+.card-title{font-size:15px;font-weight:700;color:var(--ink);margin-bottom:4px}
+.card-sub{font-size:12px;color:#64748b;margin-bottom:16px}
+
+.field-label{font-size:12px;font-weight:600;color:var(--ink3);margin-bottom:5px;display:block}
+.field-label span{font-weight:400;color:#94a3b8;margin-left:4px}
+input[type=text],select,textarea{
+  width:100%;padding:9px 12px;border:1px solid var(--border2);border-radius:8px;
+  font-family:var(--sans);font-size:13px;color:var(--ink);background:var(--panel);
+  outline:none;transition:border .15s;
+}
+input[type=text]:focus,select:focus{border-color:var(--accent);
+  box-shadow:0 0 0 3px rgba(37,99,235,.08)}
+select{cursor:pointer}
+.mono-input{font-family:var(--mono);font-size:12px}
+
+.btn{
+  display:inline-flex;align-items:center;gap:7px;padding:9px 18px;
+  border-radius:9px;font-size:13px;font-weight:600;cursor:pointer;
+  border:none;transition:all .15s;
+}
+.btn-primary{
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  color:#fff;box-shadow:0 3px 10px rgba(37,99,235,.3);
+}
+.btn-primary:hover{transform:translateY(-1px);box-shadow:0 5px 16px rgba(37,99,235,.4)}
+.btn-primary:disabled{opacity:.45;transform:none;cursor:not-allowed}
+.btn-ghost{background:var(--surface);color:var(--ink3);border:1px solid var(--border2)}
+.btn-ghost:hover{background:var(--border);color:var(--ink)}
+.btn-danger{background:rgba(220,38,38,.08);color:var(--danger);border:1px solid rgba(220,38,38,.2)}
+.btn-danger:hover{background:rgba(220,38,38,.15)}
+
+.tag{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:3px 9px;border-radius:6px;font-size:11px;font-weight:600;
+}
+.tag-in{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+.tag-out{background:#f0fdf4;color:#15803d;border:1px solid #bbf7d0}
+
+/* file drop zone */
+#drop-zone{
+  border:2px dashed var(--border2);border-radius:12px;
+  padding:48px 24px;text-align:center;cursor:pointer;
+  transition:all .2s;background:var(--surface);
+}
+#drop-zone.drag{border-color:var(--accent);background:#eff6ff}
+#drop-zone.has-file{border-color:var(--success);border-style:solid;background:#f0fdf4}
+#drop-zone .dz-icon{font-size:36px;margin-bottom:12px}
+#drop-zone .dz-title{font-size:15px;font-weight:700;color:var(--ink)}
+#drop-zone .dz-sub{font-size:12px;color:#64748b;margin-top:4px}
+#drop-zone input{display:none}
+
+/* ── BUILD panel ──────────────────────────────────────────── */
+.build-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:900px){.build-grid{grid-template-columns:1fr}}
+
+.ep-category{margin-bottom:8px}
+.ep-cat-label{font-size:11px;font-weight:700;color:#94a3b8;
+  text-transform:uppercase;letter-spacing:.08em;padding:6px 0 4px}
+.ep-item{
+  padding:9px 12px;border-radius:8px;cursor:pointer;
+  border:1px solid transparent;background:var(--surface);
+  margin-bottom:4px;transition:all .15s;
+}
+.ep-item:hover{background:var(--border);border-color:var(--border2)}
+.ep-item.selected{background:#eff6ff;border-color:#bfdbfe}
+.ep-name{font-size:12px;font-weight:600;color:var(--ink)}
+.ep-path{font-family:var(--mono);font-size:10px;color:#64748b;margin-top:1px}
+
+.param-row{display:grid;grid-template-columns:140px 1fr;gap:8px;align-items:center;margin-bottom:8px}
+.param-name{font-family:var(--mono);font-size:11px;font-weight:500;color:var(--ink3)}
+.param-req{color:var(--danger);margin-left:2px}
+
+.output-table{width:100%;border-collapse:collapse}
+.output-table th{text-align:left;font-size:11px;font-weight:700;color:#64748b;
+  text-transform:uppercase;letter-spacing:.06em;padding:6px 8px;
+  border-bottom:1px solid var(--border)}
+.output-table td{padding:5px 8px;vertical-align:middle}
+.output-table tr:not(:last-child) td{border-bottom:1px solid var(--surface)}
+.output-table input{padding:6px 8px;font-size:12px}
+.del-row-btn{padding:4px 8px;border:none;border-radius:5px;
+  background:transparent;color:#94a3b8;cursor:pointer;font-size:13px}
+.del-row-btn:hover{color:var(--danger);background:rgba(220,38,38,.08)}
+.add-output-btn{
+  margin-top:8px;padding:7px 12px;border-radius:7px;font-size:12px;font-weight:600;
+  background:var(--surface);border:1px dashed var(--border2);color:#64748b;
+  cursor:pointer;transition:all .15s;width:100%;text-align:center;
+}
+.add-output-btn:hover{background:var(--border);color:var(--ink3)}
+
+.field-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+.field-chip{
+  font-family:var(--mono);font-size:10px;padding:3px 7px;border-radius:5px;
+  background:#f1f5f9;border:1px solid var(--border2);color:var(--ink3);
+  cursor:pointer;transition:all .12s;user-select:none;
+}
+.field-chip:hover{background:#e0f2fe;border-color:#38bdf8;color:#0369a1}
+.field-chip:active{transform:scale(.97)}
+
+/* ── RUN panel ────────────────────────────────────────────── */
+.run-meta{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px}
+.run-stat{
+  flex:1;min-width:100px;padding:14px 16px;border-radius:10px;
+  background:var(--panel);border:1px solid var(--border);text-align:center;
+}
+.run-stat-val{font-size:22px;font-weight:800;color:var(--ink)}
+.run-stat-lbl{font-size:10px;font-weight:700;color:#94a3b8;
+  text-transform:uppercase;letter-spacing:.08em;margin-top:2px}
+
+/* terminal log */
+#log-wrap{
+  background:#0a0f1e;border-radius:10px;padding:14px;
+  height:240px;overflow-y:auto;font-family:var(--mono);font-size:11px;
+  line-height:1.7;margin-bottom:16px;
+}
+#log-wrap::-webkit-scrollbar{width:4px}
+#log-wrap::-webkit-scrollbar-thumb{background:rgba(255,255,255,.15);border-radius:2px}
+.log-line{color:#94a3b8}
+.log-line.ok{color:#34d399}
+.log-line.err{color:#f87171}
+.log-line.info{color:#60a5fa}
+.log-line.warn{color:#fbbf24}
+
+/* progress */
+.progress-wrap{margin-bottom:16px}
+.progress-top{display:flex;justify-content:space-between;
+  font-size:12px;font-weight:600;color:var(--ink3);margin-bottom:6px}
+.progress-track{
+  height:8px;border-radius:999px;background:var(--surface);
+  border:1px solid var(--border);overflow:hidden;
+}
+.progress-fill{
+  height:100%;border-radius:999px;
+  background:linear-gradient(90deg,var(--accent),var(--accent2),#06b6d4);
+  background-size:200% 100%;
+  transition:width .3s ease;
+  animation:shimmer 2s linear infinite;
+}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* download area */
+#download-area{
+  padding:20px;border-radius:12px;text-align:center;
+  background:linear-gradient(135deg,#f0fdf4,#ecfdf5);
+  border:1px solid #bbf7d0;display:none;
+}
+#download-area.show{display:block}
+#download-area h3{font-size:16px;font-weight:700;color:#065f46;margin-bottom:6px}
+#download-area p{font-size:12px;color:#047857;margin-bottom:14px}
+
+/* empty states */
+.empty{
+  text-align:center;padding:48px 24px;color:#94a3b8;
+}
+.empty-icon{font-size:40px;margin-bottom:12px}
+.empty-title{font-size:15px;font-weight:600;color:#64748b;margin-bottom:6px}
+.empty-sub{font-size:12px}
+
+/* alerts */
+.alert{
+  padding:10px 14px;border-radius:8px;font-size:12px;font-weight:500;
+  margin-bottom:12px;display:flex;align-items:center;gap:8px;
+}
+.alert-warn{background:#fffbeb;border:1px solid #fde68a;color:#92400e}
+.alert-danger{background:#fef2f2;border:1px solid #fecaca;color:#991b1b}
+.alert-ok{background:#f0fdf4;border:1px solid #bbf7d0;color:#065f46}
+
+/* step edit form */
+#step-form{display:none}
+#step-form.open{display:block}
+.form-section{margin-bottom:20px}
+.form-section-title{
+  font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em;
+  color:#64748b;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border);
+}
+
+/* swagger loading */
+.swagger-status{
+  font-size:11px;color:#64748b;padding:4px 10px;border-radius:5px;
+  background:var(--surface);border:1px solid var(--border);
+  display:inline-flex;align-items:center;gap:5px;
+}
+.spin{display:inline-block;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* tooltip */
+[data-tip]{position:relative;cursor:help}
+[data-tip]::after{
+  content:attr(data-tip);position:absolute;bottom:calc(100% + 6px);left:50%;
+  transform:translateX(-50%);white-space:nowrap;
+  background:var(--ink);color:#e2e8f0;font-size:11px;padding:4px 8px;
+  border-radius:5px;pointer-events:none;opacity:0;transition:opacity .15s;z-index:99;
+}
+[data-tip]:hover::after{opacity:1}
+</style>
+</head>
+<body>
+<div id="app">
+
+<!-- ══ SIDEBAR ══════════════════════════════════════════════════════════════ -->
+<nav id="sidebar">
+  <div class="sb-logo">
+    <div class="badge"><span class="dot"></span>Bridgewise Internal</div>
+    <h1>Bulk Enricher</h1>
+    <p>API data pipeline tool</p>
+  </div>
+
+  <!-- token -->
+  <div class="sb-section">
+    <div class="sb-label">Access Token</div>
+    <div class="token-wrap">
+      <input id="token-input" type="text" placeholder="Paste token here…" autocomplete="off" spellcheck="false"/>
+      <span class="token-status" id="token-status"></span>
+    </div>
+  </div>
+
+  <!-- environment -->
+  <div class="sb-section">
+    <div class="sb-label">Environment</div>
+    <div class="env-pills">
+      <button class="env-pill active" data-env="production">Prod</button>
+      <button class="env-pill" data-env="stage">Stage</button>
+      <button class="env-pill" data-env="dev">Dev</button>
+    </div>
+    <div style="font-family:var(--mono);font-size:10px;color:#475569;margin-top:8px" id="env-url"></div>
+  </div>
+
+  <!-- pipeline steps -->
+  <div class="sb-section" id="sb-pipeline" style="padding-bottom:0">
+    <div class="sb-label">Pipeline Steps</div>
+  </div>
+  <div class="sb-steps" id="sb-steps-list"></div>
+  <div class="sb-add-btn" id="sb-add-btn">＋ Add step</div>
+
+  <!-- concurrency -->
+  <div class="sb-section">
+    <div class="sb-label">Concurrency</div>
+    <div class="conc-row">
+      <input type="range" id="conc-slider" min="1" max="20" value="5"/>
+      <span class="conc-val" id="conc-val">5</span>
+    </div>
+  </div>
+
+  <!-- reset -->
+  <div class="sb-reset" id="reset-btn">⚠ Reset everything</div>
+</nav>
+
+<!-- ══ MAIN ══════════════════════════════════════════════════════════════════ -->
+<div id="main">
+  <div id="tabs">
+    <div class="tab active" data-tab="setup">📂 Setup Data</div>
+    <div class="tab" data-tab="build">🛠 Build Pipeline</div>
+    <div class="tab" data-tab="run">▶ Run</div>
+  </div>
+
+  <div id="panels">
+
+    <!-- ── SETUP ── -->
+    <div class="panel active" id="panel-setup">
+      <div class="card">
+        <div class="card-title">Upload CSV</div>
+        <div class="card-sub">Drop your input file here — rows become API calls</div>
+        <div id="drop-zone">
+          <input type="file" id="file-input" accept=".csv"/>
+          <div class="dz-icon">📄</div>
+          <div class="dz-title" id="dz-title">Drop CSV here or click to browse</div>
+          <div class="dz-sub" id="dz-sub">Supports files up to 200 MB</div>
+        </div>
+      </div>
+      <div class="card" id="preview-card" style="display:none">
+        <div class="card-title">Preview <span id="preview-badge" style="font-size:12px;font-weight:500;color:#64748b"></span></div>
+        <div style="overflow-x:auto;margin-top:8px">
+          <table id="preview-table" style="width:100%;border-collapse:collapse;font-size:12px"></table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── BUILD ── -->
+    <div class="panel" id="panel-build">
+      <div id="build-empty" class="empty">
+        <div class="empty-icon">📂</div>
+        <div class="empty-title">Upload a CSV first</div>
+        <div class="empty-sub">Switch to Setup Data to load your file</div>
+      </div>
+      <div id="step-form" class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+          <div>
+            <div class="card-title" id="form-title">Add Step</div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+              <span class="swagger-status" id="swagger-status">
+                <span class="spin">⟳</span> Loading API schema…
+              </span>
+            </div>
+          </div>
+          <button class="btn btn-ghost" id="form-cancel-btn" style="font-size:12px">Cancel</button>
+        </div>
+
+        <!-- endpoint selector -->
+        <div class="form-section">
+          <div class="form-section-title">Endpoint</div>
+          <div style="display:flex;gap:10px;margin-bottom:10px">
+            <input type="text" id="ep-search" placeholder="Search endpoints…" style="flex:1"/>
+          </div>
+          <div id="ep-list" style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:8px;padding:6px"></div>
+        </div>
+
+        <!-- params -->
+        <div class="form-section" id="params-section" style="display:none">
+          <div class="form-section-title">Parameters</div>
+          <div id="params-rows"></div>
+        </div>
+
+        <!-- outputs -->
+        <div class="form-section" id="outputs-section" style="display:none">
+          <div class="form-section-title">Output Mapping</div>
+          <div id="fields-hint" style="margin-bottom:10px">
+            <div style="font-size:11px;color:#64748b;margin-bottom:6px">Available fields — click to add:</div>
+            <div class="field-chips" id="field-chips"></div>
+          </div>
+          <table class="output-table">
+            <thead><tr>
+              <th>API field path</th>
+              <th>CSV column name</th>
+              <th></th>
+            </tr></thead>
+            <tbody id="output-rows"></tbody>
+          </table>
+          <div class="add-output-btn" id="add-output-row">＋ Add output field</div>
+        </div>
+
+        <div style="display:flex;gap:10px;margin-top:4px">
+          <button class="btn btn-primary" id="save-step-btn">💾 Save Step</button>
+          <button class="btn btn-ghost" id="form-cancel-btn2">Cancel</button>
+        </div>
+      </div>
+
+      <!-- pipeline overview when no form -->
+      <div id="pipeline-overview"></div>
+    </div>
+
+    <!-- ── RUN ── -->
+    <div class="panel" id="panel-run">
+      <div id="run-empty" class="empty" style="display:none">
+        <div class="empty-icon">🛠</div>
+        <div class="empty-title">Pipeline is empty</div>
+        <div class="empty-sub">Add steps in the Build Pipeline tab first</div>
+      </div>
+
+      <div id="run-content">
+        <div class="run-meta">
+          <div class="run-stat"><div class="run-stat-val" id="stat-rows">—</div><div class="run-stat-lbl">Rows</div></div>
+          <div class="run-stat"><div class="run-stat-val" id="stat-steps">—</div><div class="run-stat-lbl">Steps</div></div>
+          <div class="run-stat"><div class="run-stat-val" id="stat-done">0</div><div class="run-stat-lbl">Processed</div></div>
+          <div class="run-stat"><div class="run-stat-val" id="stat-errors" style="color:var(--success)">0</div><div class="run-stat-lbl">Errors</div></div>
+          <div class="run-stat"><div class="run-stat-val" id="stat-eta">—</div><div class="run-stat-lbl">ETA</div></div>
+        </div>
+
+        <div id="run-alerts"></div>
+
+        <div class="progress-wrap" id="progress-wrap" style="display:none">
+          <div class="progress-top">
+            <span id="progress-label">0 / 0</span>
+            <span id="progress-pct">0%</span>
+          </div>
+          <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+        </div>
+
+        <div class="card" style="padding:0;overflow:hidden;margin-bottom:16px">
+          <div style="padding:10px 14px;border-bottom:1px solid var(--border);
+            display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:12px;font-weight:700;color:var(--ink)">Live log</span>
+            <button class="btn btn-ghost" id="clear-log-btn" style="font-size:11px;padding:4px 10px">Clear</button>
+          </div>
+          <div id="log-wrap"><div class="log-line info">Ready. Configure your pipeline and click Run.</div></div>
+        </div>
+
+        <div id="download-area">
+          <h3>✅ Enrichment complete</h3>
+          <p id="download-summary"></p>
+          <button class="btn btn-primary" id="download-btn">⬇ Download CSV</button>
+        </div>
+
+        <div style="display:flex;gap:10px">
+          <button class="btn btn-primary" id="run-btn">🚀 Run Full Process</button>
+          <button class="btn btn-ghost" id="test-btn">🔍 Test 1 Row</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /panels -->
+</div><!-- /main -->
+</div><!-- /app -->
+
+<script>
+// ══════════════════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════════════════
+const S = {
+  token: localStorage.getItem('bw_token') || '',
+  env: 'production',
+  pipeline: [],          // [{name,url_template,path_map,query_map,output_map,required_params}]
+  csvText: '',
+  csvHeaders: [],
+  csvRows: [],
+  filename: 'output',
+  concurrency: 5,
+  swagger: {},           // {category: {path: {label,path:[],query:[],outputs:[]}}}
+  swaggerLoaded: false,
+  editingIdx: null,      // null = adding new, N = editing step N
+  selectedEp: null,      // currently selected endpoint path in form
+  lastCsvB64: null,
+  lastFilename: null,
+};
+
+const ENV_URLS = {
+  production: 'https://rest.bridgewise.com',
+  stage:      'https://rest.stage-bridgewise.com',
+  dev:        'https://rest.dev-bridgewise.com',
+};
+
+const PRIMARY_PARAMS = ['identifier','company_id','fund_id','isin','ticker','bond_id','asset_id'];
+const DROPDOWN_OPTIONS = {
+  scoring_method: ['global','industry'],
+  show_all: ['true','false'],
+  language: ['en-US','he-IL','de-DE','fr-FR','es-ES','pt-BR','ja-JP','zh-CN','ar-SA'],
+  period_type: ['quarterly','annually','last_12_month'],
+  sort_by: ['rank','-rank','publication_date','-publication_date'],
+  identifier_type: ['isin','ticker_exchange','tase','custom'],
+  asset_class: ['stocks','funds'],
+  include_filter: ['true','false'],
+  report_type: ['stock','fund'],
+};
+
+// ══════════════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', () => {
+  // restore token
+  q('#token-input').value = S.token;
+  updateTokenStatus();
+
+  // restore pipeline from sessionStorage (not localStorage — fresh pipeline each visit but same tab)
+  const saved = sessionStorage.getItem('bw_pipeline');
+  if (saved) try { S.pipeline = JSON.parse(saved) } catch(e){}
+
+  renderSidebar();
+  setEnv('production');
+  loadSwagger();
+  setupTabs();
+  setupDrop();
+  setupToken();
+  setupEnvPills();
+  setupConcurrency();
+  setupBuild();
+  setupRun();
+  setupReset();
+  updateRunStats();
+});
+
+// ══════════════════════════════════════════════════════════════════
+// UTILS
+// ══════════════════════════════════════════════════════════════════
+const q  = s => document.querySelector(s);
+const qq = s => [...document.querySelectorAll(s)];
+const el = (tag, cls, html='') => {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html) e.innerHTML = html;
+  return e;
+};
+const fmtEta = s => {
+  if (!s || s <= 0) return '—';
+  if (s < 60) return `${Math.round(s)}s`;
+  if (s < 3600) return `${Math.floor(s/60)}m ${Math.round(s%60)}s`;
+  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+};
+function log(msg, type='') {
+  const wrap = q('#log-wrap');
+  const d = el('div','log-line '+ type, msg);
+  wrap.appendChild(d);
+  wrap.scrollTop = wrap.scrollHeight;
+}
+function clearLog() { q('#log-wrap').innerHTML = '' }
+
+// ══════════════════════════════════════════════════════════════════
+// TABS
+// ══════════════════════════════════════════════════════════════════
+function setupTabs() {
+  qq('.tab').forEach(t => {
+    t.onclick = () => {
+      qq('.tab').forEach(x => x.classList.remove('active'));
+      qq('.panel').forEach(x => x.classList.remove('active'));
+      t.classList.add('active');
+      q('#panel-'+t.dataset.tab).classList.add('active');
+      if (t.dataset.tab === 'build') refreshBuildPanel();
+      if (t.dataset.tab === 'run')   updateRunStats();
+    };
+  });
+}
+function goTab(name) {
+  qq('.tab').forEach(x => x.classList.remove('active'));
+  qq('.panel').forEach(x => x.classList.remove('active'));
+  q(`.tab[data-tab="${name}"]`).classList.add('active');
+  q('#panel-'+name).classList.add('active');
+  if (name === 'build') refreshBuildPanel();
+  if (name === 'run')   updateRunStats();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// TOKEN
+// ══════════════════════════════════════════════════════════════════
+function setupToken() {
+  q('#token-input').addEventListener('input', e => {
+    S.token = e.target.value;
+    localStorage.setItem('bw_token', S.token);
+    updateTokenStatus();
+  });
+}
+function updateTokenStatus() {
+  q('#token-status').textContent = S.token ? '✅' : '⚠️';
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ENVIRONMENT
+// ══════════════════════════════════════════════════════════════════
+function setupEnvPills() {
+  qq('.env-pill').forEach(p => {
+    p.onclick = () => setEnv(p.dataset.env);
+  });
+}
+function setEnv(env) {
+  S.env = env;
+  qq('.env-pill').forEach(p => p.classList.toggle('active', p.dataset.env === env));
+  q('#env-url').textContent = ENV_URLS[env];
+  loadSwagger();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SWAGGER
+// ══════════════════════════════════════════════════════════════════
+async function loadSwagger() {
+  const swUrl = `${ENV_URLS[S.env]}/docs/openapi.json`;
+  q('#swagger-status').innerHTML = '<span class="spin">⟳</span> Loading schema…';
+  S.swaggerLoaded = false;
+  try {
+    const r = await fetch(`/api/swagger?url=${encodeURIComponent(swUrl)}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    S.swagger = parseSwagger(data);
+    S.swaggerLoaded = true;
+    q('#swagger-status').innerHTML = '✅ Schema loaded';
+    if (S.editingIdx !== null || q('#step-form').classList.contains('open')) {
+      renderEndpointList();
+    }
+  } catch(e) {
+    q('#swagger-status').innerHTML = `⚠️ Schema unavailable — ${e.message}`;
+  }
+}
+
+function parseSwagger(data) {
+  const specs = {};
+  for (const [path, item] of Object.entries(data.paths || {})) {
+    if (!item.get) continue;
+    const ops = Array.isArray(item.get) ? item.get : [item.get];
+    const pathLevelParams = item.parameters || [];
+    for (const op of ops) {
+      const cat = (op.tags || ['Other'])[0];
+      if (!specs[cat]) specs[cat] = {};
+      const allParams = [...pathLevelParams, ...(op.parameters || [])];
+      const pathP = [], queryP = [];
+      for (let p of allParams) {
+        if (p.$ref) p = resolveRef(p.$ref, data) || p;
+        const sc = p.schema || {};
+        const meta = {
+          name: p.name, desc: p.description || '',
+          type: sc.type || 'string', example: String(p.example || ''),
+          required: !!(p.required || sc.required),
+          enum: sc.enum || p.enum || [],
+        };
+        if (p.in === 'path')  pathP.push(meta);
+        if (p.in === 'query') queryP.push(meta);
+      }
+      // extract output fields
+      let outputs = [];
+      try {
+        const sc200 = (op.responses?.['200']?.content?.['application/json']?.schema) || {};
+        outputs = extractFields(sc200, data);
+      } catch(e){}
+      if (path.includes('identifier-search')) {
+        outputs = [...new Set([...outputs,
+          'company_id','security_id','trading_item_id','ticker_symbol',
+          'exchange_symbol','exchange_name','exchange_id','currency_iso3',
+          'asset_type','has_score','primary_flag','security_primary_flag'])];
+      }
+      if (path.includes('esg-analysis') && !queryP.find(q => q.name==='scoring_method')) {
+        queryP.push({name:'scoring_method',desc:'Calc method',type:'string',
+          example:'global',required:false,enum:['global','industry']});
+      }
+      let key = path;
+      if (specs[cat][key]) {
+        const pn = pathP[0]?.name || queryP.find(q=>q.required)?.name;
+        key = pn ? `${path} (by ${pn})` : `${path} (v2)`;
+      }
+      specs[cat][key] = {
+        label: op.summary || path,
+        path: pathP, query: queryP,
+        outputs: [...new Set(outputs)].sort(),
+        defaults: path.includes('identifier-search')
+          ? [{json_field:'company_id',csv_column:'BW_ID'}]
+          : [{json_field:'data',csv_column:'Output'}],
+      };
+    }
+  }
+  return specs;
+}
+
+function resolveRef(ref, root) {
+  const parts = ref.split('/');
+  if (parts[1]==='components') return root?.components?.[parts[2]]?.[parts[3]];
+  return null;
+}
+
+function extractFields(schema, root, visited=new Set(), depth=0) {
+  if (depth > 12 || !schema) return [];
+  if (schema.$ref) {
+    const k = schema.$ref.split('/').pop();
+    if (visited.has(k)) return [];
+    visited.add(k);
+    return extractFields(root?.components?.schemas?.[k]||{}, root, visited, depth+1);
+  }
+  if (schema.type==='array' && schema.items) return extractFields(schema.items,root,visited,depth+1);
+  const fields = [];
+  if (schema.properties) fields.push(...Object.keys(schema.properties));
+  if (schema.allOf) for (const s of schema.allOf) fields.push(...extractFields(s,root,visited,depth+1));
+  return fields;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// FILE DROP
+// ══════════════════════════════════════════════════════════════════
+function setupDrop() {
+  const dz = q('#drop-zone');
+  const fi = q('#file-input');
+
+  dz.onclick = () => fi.click();
+  fi.onchange = () => loadFile(fi.files[0]);
+
+  dz.ondragover = e => { e.preventDefault(); dz.classList.add('drag') };
+  dz.ondragleave = () => dz.classList.remove('drag');
+  dz.ondrop = e => {
+    e.preventDefault(); dz.classList.remove('drag');
+    loadFile(e.dataTransfer.files[0]);
+  };
+}
+
+function loadFile(file) {
+  if (!file) return;
+  S.filename = file.name.replace(/\.csv$/i,'');
+  const reader = new FileReader();
+  reader.onload = e => {
+    S.csvText = e.target.result;
+    parseCSV(S.csvText);
+    renderDropZone();
+    renderPreview();
+    updateRunStats();
+  };
+  reader.readAsText(file);
+}
+
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (!lines.length) return;
+  // simple CSV parse (handles quoted fields)
+  function parseLine(line) {
+    const result = []; let cur = ''; let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { inQ = !inQ; continue; }
+      if (c === ',' && !inQ) { result.push(cur.trim()); cur = ''; continue; }
+      cur += c;
+    }
+    result.push(cur.trim());
+    return result;
+  }
+  S.csvHeaders = parseLine(lines[0]);
+  S.csvRows = lines.slice(1).filter(l=>l.trim()).map(l => {
+    const vals = parseLine(l);
+    const obj = {};
+    S.csvHeaders.forEach((h,i) => obj[h] = vals[i] ?? '');
+    return obj;
+  });
+}
+
+function renderDropZone() {
+  const dz = q('#drop-zone');
+  dz.classList.add('has-file');
+  q('#dz-title').textContent = `✅ ${S.filename}.csv`;
+  q('#dz-sub').textContent = `${S.csvRows.length} rows · ${S.csvHeaders.length} columns`;
+}
+
+function renderPreview() {
+  const card = q('#preview-card');
+  card.style.display = 'block';
+  q('#preview-badge').textContent = `— ${S.csvRows.length} rows, ${S.csvHeaders.length} columns`;
+  const tbl = q('#preview-table');
+  const previewRows = S.csvRows.slice(0,5);
+  tbl.innerHTML = `
+    <thead style="background:var(--surface)">
+      <tr>${S.csvHeaders.map(h=>`<th style="padding:6px 10px;text-align:left;font-size:11px;
+        font-weight:700;color:#64748b;white-space:nowrap;border-bottom:1px solid var(--border)">${h}</th>`).join('')}</tr>
+    </thead>
+    <tbody>
+      ${previewRows.map(r=>`<tr>${S.csvHeaders.map(h=>`
+        <td style="padding:5px 10px;font-size:12px;border-bottom:1px solid var(--surface);
+          max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r[h]??''}</td>
+      `).join('')}</tr>`).join('')}
+    </tbody>`;
+}
+
+// ══════════════════════════════════════════════════════════════════
+// SIDEBAR PIPELINE
+// ══════════════════════════════════════════════════════════════════
+function savePipeline() {
+  sessionStorage.setItem('bw_pipeline', JSON.stringify(S.pipeline));
+}
+
+function renderSidebar() {
+  const list = q('#sb-steps-list');
+  if (!S.pipeline.length) {
+    list.innerHTML = `<div style="text-align:center;padding:16px 0;font-size:11px;color:#475569">No steps yet</div>`;
+    return;
+  }
+  list.innerHTML = S.pipeline.map((step, i) => `
+    <div class="sb-step${S.editingIdx===i?' active':''}" data-idx="${i}">
+      <div class="sb-step-name">${i+1}. ${step.name}</div>
+      <div class="sb-step-url">${step.url_template}</div>
+      <div class="sb-step-actions">
+        ${i > 0 ? `<button class="sb-step-btn" onclick="moveStep(${i},-1)" title="Move up">↑</button>` : ''}
+        ${i < S.pipeline.length-1 ? `<button class="sb-step-btn" onclick="moveStep(${i},1)" title="Move down">↓</button>` : ''}
+        <button class="sb-step-btn" onclick="editStep(${i})" title="Edit">✏</button>
+        <button class="sb-step-btn del" onclick="deleteStep(${i})" title="Delete">✕</button>
+      </div>
+    </div>
+  `).join('');
+
+  // click to edit
+  qq('.sb-step').forEach(el => {
+    el.onclick = e => {
+      if (e.target.closest('.sb-step-btn')) return;
+      editStep(parseInt(el.dataset.idx));
+    };
+  });
+}
+
+function moveStep(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= S.pipeline.length) return;
+  [S.pipeline[i], S.pipeline[j]] = [S.pipeline[j], S.pipeline[i]];
+  savePipeline();
+  renderSidebar();
+  refreshBuildPanel();
+}
+
+function deleteStep(i) {
+  if (!confirm(`Delete step "${S.pipeline[i].name}"?`)) return;
+  S.pipeline.splice(i, 1);
+  if (S.editingIdx === i) closeForm();
+  else if (S.editingIdx > i) S.editingIdx--;
+  savePipeline();
+  renderSidebar();
+  refreshBuildPanel();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// BUILD PANEL
+// ══════════════════════════════════════════════════════════════════
+function setupBuild() {
+  q('#sb-add-btn').onclick = () => { goTab('build'); openForm(null) };
+  q('#form-cancel-btn').onclick  = closeForm;
+  q('#form-cancel-btn2').onclick = closeForm;
+  q('#save-step-btn').onclick    = saveStep;
+  q('#add-output-row').onclick   = () => addOutputRow('','');
+  q('#ep-search').addEventListener('input', e => filterEndpoints(e.target.value));
+}
+
+function refreshBuildPanel() {
+  const hasCSV = S.csvRows.length > 0;
+  q('#build-empty').style.display = hasCSV ? 'none' : 'block';
+  if (!hasCSV) { closeForm(); return; }
+  renderPipelineOverview();
+}
+
+function renderPipelineOverview() {
+  const wrap = q('#pipeline-overview');
+  if (q('#step-form').classList.contains('open')) { wrap.innerHTML=''; return; }
+  if (!S.pipeline.length) {
+    wrap.innerHTML = `<div class="empty">
+      <div class="empty-icon">🔧</div>
+      <div class="empty-title">No steps yet</div>
+      <div class="empty-sub">Click "+ Add step" in the sidebar to begin</div>
+    </div>`;
+    return;
+  }
+  wrap.innerHTML = S.pipeline.map((step, i) => {
+    const ins = Object.entries({...step.path_map,...step.query_map})
+      .filter(([,v])=>v).map(([k,v])=>
+        `<span class="tag tag-in">${v.type==='csv'?'📄':'🔤'} ${k}: ${v.value}</span>`).join('');
+    const outs = (step.output_map||[]).map(o=>
+      `<span class="tag tag-out">📤 ${o.json_field} → ${o.csv_column}</span>`).join('');
+    return `<div class="card" style="border-left:4px solid var(--accent)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+        <div>
+          <div style="font-weight:700;color:var(--ink);font-size:14px">${i+1}. ${step.name}</div>
+          <div style="font-family:var(--mono);font-size:11px;color:#64748b;margin-top:2px">${step.url_template}</div>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-ghost" style="font-size:11px;padding:5px 10px" onclick="editStep(${i})">✏ Edit</button>
+          <button class="btn btn-danger" style="font-size:11px;padding:5px 10px" onclick="deleteStep(${i})">✕</button>
+        </div>
+      </div>
+      <div style="margin-bottom:6px">
+        <span style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase">IN: </span>${ins||'<span style="color:#94a3b8;font-size:11px">none</span>'}
+      </div>
+      <div>
+        <span style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase">OUT: </span>${outs||'<span style="color:#94a3b8;font-size:11px">none</span>'}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openForm(idx) {
+  S.editingIdx = idx;
+  S.selectedEp = null;
+  q('#step-form').classList.add('open');
+  q('#pipeline-overview').innerHTML = '';
+  q('#params-section').style.display = 'none';
+  q('#outputs-section').style.display = 'none';
+  q('#form-title').textContent = idx === null ? 'Add Step' : `Edit Step ${idx+1}`;
+  q('#ep-search').value = '';
+  renderEndpointList();
+  renderSidebar();
+
+  // if editing, pre-select the endpoint
+  if (idx !== null) {
+    const step = S.pipeline[idx];
+    S.selectedEp = step.url_template;
+    // find the ep conf
+    const epConf = findEpConf(S.selectedEp);
+    if (epConf) renderParamsAndOutputs(S.selectedEp, epConf, step);
+  }
+}
+
+function closeForm() {
+  q('#step-form').classList.remove('open');
+  S.editingIdx = null;
+  S.selectedEp = null;
+  renderPipelineOverview();
+  renderSidebar();
+}
+
+function findEpConf(urlKey) {
+  for (const cat of Object.values(S.swagger)) {
+    if (cat[urlKey]) return cat[urlKey];
+  }
+  return null;
+}
+
+function renderEndpointList() {
+  const list = q('#ep-list');
+  if (!S.swaggerLoaded) {
+    list.innerHTML = '<div style="padding:12px;color:#64748b;font-size:12px">Loading schema…</div>';
+    return;
+  }
+  const search = (q('#ep-search').value || '').toLowerCase();
+  list.innerHTML = '';
+  for (const [cat, eps] of Object.entries(S.swagger)) {
+    const items = Object.entries(eps).filter(([path,{label}]) =>
+      !search || path.toLowerCase().includes(search) || label.toLowerCase().includes(search)
+    );
+    if (!items.length) continue;
+    const catEl = el('div','ep-category');
+    catEl.innerHTML = `<div class="ep-cat-label">${cat}</div>`;
+    for (const [path, conf] of items) {
+      const item = el('div', `ep-item${S.selectedEp===path?' selected':''}` );
+      item.innerHTML = `<div class="ep-name">${conf.label}</div><div class="ep-path">${path}</div>`;
+      item.onclick = () => selectEndpoint(path, conf);
+      catEl.appendChild(item);
+    }
+    list.appendChild(catEl);
+  }
+  if (!list.children.length) {
+    list.innerHTML = '<div style="padding:12px;color:#64748b;font-size:12px">No matching endpoints</div>';
+  }
+}
+
+function filterEndpoints(q_) { renderEndpointList() }
+
+function selectEndpoint(path, conf) {
+  S.selectedEp = path;
+  qq('.ep-item').forEach(e => e.classList.remove('selected'));
+  event.currentTarget.classList.add('selected');
+  const existing = S.editingIdx !== null ? S.pipeline[S.editingIdx] : null;
+  renderParamsAndOutputs(path, conf, existing?.url_template === path ? existing : null);
+}
+
+function renderParamsAndOutputs(path, conf, existing) {
+  // PARAMS
+  const pathParams  = conf.path  || [];
+  const queryParams = conf.query || [];
+  const promoted    = queryParams.filter(q => PRIMARY_PARAMS.includes(q.name) || q.required);
+  const optional    = queryParams.filter(q => !PRIMARY_PARAMS.includes(q.name) && !q.required);
+
+  const existingPathMap  = existing?.path_map  || {};
+  const existingQueryMap = existing?.query_map || {};
+
+  // Build available columns (base + outputs from earlier steps)
+  const availCols = [...S.csvHeaders];
+  const editIdx   = S.editingIdx ?? S.pipeline.length;
+  for (let i = 0; i < editIdx; i++) {
+    for (const o of (S.pipeline[i].output_map || [])) {
+      if (!availCols.includes(o.csv_column)) availCols.push(o.csv_column);
+    }
+  }
+
+  const rows = q('#params-rows');
+  rows.innerHTML = '';
+
+  if (pathParams.length || promoted.length) {
+    const sec = el('div');
+    sec.innerHTML = `<div style="font-size:11px;font-weight:700;color:#64748b;margin-bottom:8px">
+      Required / Primary</div>`;
+    for (const p of pathParams) {
+      sec.appendChild(buildParamRow(p, 'path', existingPathMap[p.name], availCols, true));
+    }
+    for (const p of promoted) {
+      sec.appendChild(buildParamRow(p, 'query', existingQueryMap[p.name], availCols, true));
+    }
+    rows.appendChild(sec);
+  }
+  if (optional.length) {
+    const sec = el('div', '', `<div style="font-size:11px;font-weight:700;color:#64748b;margin:12px 0 8px">Optional filters</div>`);
+    for (const p of optional) {
+      sec.appendChild(buildParamRow(p, 'query', existingQueryMap[p.name], availCols, false));
+    }
+    rows.appendChild(sec);
+  }
+
+  q('#params-section').style.display = 'block';
+
+  // OUTPUTS
+  const tbody = q('#output-rows');
+  tbody.innerHTML = '';
+  const outs = existing?.output_map || conf.defaults ||
+    [{json_field:'data', csv_column:'Output'}];
+  for (const o of outs) addOutputRow(o.json_field, o.csv_column);
+
+  // field chips
+  const chips = q('#field-chips');
+  chips.innerHTML = (conf.outputs || []).map(f =>
+    `<span class="field-chip" data-field="${f}">${f}</span>`
+  ).join('');
+  qq('.field-chip').forEach(c => {
+    c.onclick = () => addOutputRow(c.dataset.field, c.dataset.field);
+  });
+
+  q('#outputs-section').style.display = 'block';
+}
+
+function buildParamRow(p, ptype, savedConf, availCols, isPrimary) {
+  const wrap = el('div','param-row');
+  const nameEl = el('div','param-name');
+  nameEl.innerHTML = `${ptype==='path'?'PATH':'QUERY'}: {${p.name}}${isPrimary?'<span class="param-req">*</span>':''}`;
+  if (p.desc) nameEl.title = p.desc;
+  wrap.appendChild(nameEl);
+
+  const inputWrap = el('div');
+  inputWrap.style.cssText = 'display:flex;gap:6px;align-items:center';
+
+  const enums = p.enum?.length ? p.enum : (DROPDOWN_OPTIONS[p.name] || []);
+  const isEnum = enums.length > 0;
+
+  if (isEnum) {
+    // mode toggle: static dropdown or csv column
+    const modeSelect = el('select');
+    modeSelect.style.cssText = 'width:90px;font-size:12px;padding:6px 8px';
+    modeSelect.innerHTML = `<option value="static">Value</option><option value="csv">Column</option>`;
+    const valSelect = el('select');
+    valSelect.style.cssText = 'flex:1;font-size:12px;padding:6px 8px';
+
+    const refreshEnumVal = (mode) => {
+      valSelect.innerHTML = '';
+      if (mode === 'static') {
+        enums.forEach(v => {
+          const o = document.createElement('option');
+          o.value = v; o.textContent = v; valSelect.appendChild(o);
+        });
+        if (savedConf?.type === 'static') valSelect.value = savedConf.value;
+      } else {
+        availCols.forEach(c => {
+          const o = document.createElement('option');
+          o.value = c; o.textContent = c; valSelect.appendChild(o);
+        });
+        if (savedConf?.type === 'csv') valSelect.value = savedConf.value;
+      }
+    };
+
+    const initMode = savedConf?.type === 'csv' ? 'csv' : 'static';
+    modeSelect.value = initMode;
+    refreshEnumVal(initMode);
+    modeSelect.onchange = () => refreshEnumVal(modeSelect.value);
+
+    modeSelect.dataset.ptype = ptype; modeSelect.dataset.pname = p.name;
+    valSelect.dataset.ptype  = ptype; valSelect.dataset.pname  = p.name;
+    modeSelect.dataset.role  = 'mode';
+    valSelect.dataset.role   = 'val';
+
+    inputWrap.appendChild(modeSelect);
+    inputWrap.appendChild(valSelect);
+  } else {
+    // mode: column or static text
+    const modeSelect = el('select');
+    modeSelect.style.cssText = 'width:100px;font-size:12px;padding:6px 8px';
+    modeSelect.innerHTML = `<option value="csv">Column</option><option value="static">Static</option>`;
+
+    const valInput = el('input','');
+    valInput.type = 'text'; valInput.style.cssText = 'flex:1;font-size:12px';
+    valInput.placeholder = p.example ? `e.g. ${p.example}` : '';
+
+    const colSelect = el('select');
+    colSelect.style.cssText = 'flex:1;font-size:12px;padding:6px 8px';
+    availCols.forEach(c => {
+      const o = document.createElement('option');
+      o.value = c; o.textContent = c; colSelect.appendChild(o);
+    });
+
+    const refreshMode = (mode) => {
+      valInput.style.display  = mode === 'static' ? '' : 'none';
+      colSelect.style.display = mode === 'csv'    ? '' : 'none';
+    };
+
+    let initMode = 'csv';
+    if (savedConf?.type === 'static') { initMode = 'static'; valInput.value = savedConf.value; }
+    else if (savedConf?.type === 'csv') {
+      initMode = 'csv'; colSelect.value = savedConf.value;
+    } else {
+      // auto-match column name
+      const match = availCols.find(c => c.toLowerCase().includes(p.name.toLowerCase()));
+      if (match) colSelect.value = match;
+    }
+    modeSelect.value = initMode;
+    refreshMode(initMode);
+    modeSelect.onchange = () => refreshMode(modeSelect.value);
+
+    [modeSelect, valInput, colSelect].forEach(el => {
+      el.dataset.ptype = ptype; el.dataset.pname = p.name;
+    });
+    modeSelect.dataset.role = 'mode';
+    valInput.dataset.role   = 'val';
+    colSelect.dataset.role  = 'col';
+
+    inputWrap.appendChild(modeSelect);
+    inputWrap.appendChild(valInput);
+    inputWrap.appendChild(colSelect);
+  }
+
+  wrap.appendChild(inputWrap);
+  return wrap;
+}
+
+function addOutputRow(field='', col='') {
+  const tbody = q('#output-rows');
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" class="mono-input out-field" placeholder="e.g. analysis_score" value="${field}"/></td>
+    <td><input type="text" class="out-col" placeholder="e.g. Score" value="${col}"/></td>
+    <td><button class="del-row-btn" onclick="this.closest('tr').remove()">✕</button></td>`;
+  tbody.appendChild(tr);
+}
+
+function collectParams() {
+  const pathMap = {}, queryMap = {}, requiredMap = {};
+  // collect from param rows
+  const rows = qq('#params-rows .param-row');
+  for (const row of rows) {
+    const modeEl = row.querySelector('[data-role="mode"]');
+    const valEl  = row.querySelector('[data-role="val"]');
+    const colEl  = row.querySelector('[data-role="col"]');
+    if (!modeEl) continue;
+    const ptype = modeEl.dataset.ptype;
+    const pname = modeEl.dataset.pname;
+    const mode  = modeEl.value;
+    let conf = null;
+    if (mode === 'static') {
+      const v = valEl?.value?.trim();
+      if (v) conf = {type:'static', value:v};
+    } else {
+      const v = (colEl || valEl)?.value;
+      if (v) conf = {type:'csv', value:v};
+    }
+    if (ptype === 'path')  pathMap[pname]  = conf;
+    if (ptype === 'query') { queryMap[pname] = conf; requiredMap[pname] = true; }
+  }
+  return {pathMap, queryMap, requiredMap};
+}
+
+function collectOutputs() {
+  return qq('#output-rows tr').map(tr => {
+    const field = tr.querySelector('.out-field')?.value?.trim();
+    const col   = tr.querySelector('.out-col')?.value?.trim();
+    return (field && col) ? {json_field:field, csv_column:col} : null;
+  }).filter(Boolean);
+}
+
+function saveStep() {
+  if (!S.selectedEp) { alert('Please select an endpoint first.'); return; }
+  const conf = findEpConf(S.selectedEp);
+  if (!conf) return;
+  const {pathMap, queryMap, requiredMap} = collectParams();
+  const outputs = collectOutputs();
+  if (!outputs.length) { alert('Add at least one output field.'); return; }
+
+  const step = {
+    name: conf.label,
+    url_template: S.selectedEp,
+    path_map: pathMap,
+    query_map: queryMap,
+    output_map: outputs,
+    required_params: requiredMap,
+    env: S.env,
+  };
+  if (S.editingIdx === null) S.pipeline.push(step);
+  else S.pipeline[S.editingIdx] = step;
+  savePipeline();
+  closeForm();
+  renderSidebar();
+  updateRunStats();
+}
+
+// ══════════════════════════════════════════════════════════════════
+// RUN PANEL
+// ══════════════════════════════════════════════════════════════════
+function setupRun() {
+  q('#run-btn').onclick  = () => startRun(false);
+  q('#test-btn').onclick = () => startRun(true);
+  q('#clear-log-btn').onclick = clearLog;
+  q('#download-btn').onclick = doDownload;
+}
+
+function updateRunStats() {
+  q('#stat-rows').textContent  = S.csvRows.length || '—';
+  q('#stat-steps').textContent = S.pipeline.length || '—';
+  const alerts = q('#run-alerts');
+  alerts.innerHTML = '';
+  if (!S.token) alerts.innerHTML += `<div class="alert alert-warn">⚠️ No token set — add it in the sidebar.</div>`;
+  if (!S.csvRows.length) alerts.innerHTML += `<div class="alert alert-warn">⚠️ No CSV loaded — go to Setup Data.</div>`;
+  if (!S.pipeline.length) alerts.innerHTML += `<div class="alert alert-warn">⚠️ Pipeline is empty — go to Build Pipeline.</div>`;
+  q('#run-btn').disabled  = !S.token || !S.csvRows.length || !S.pipeline.length;
+  q('#test-btn').disabled = !S.token || !S.csvRows.length || !S.pipeline.length;
+}
+
+async function startRun(testMode) {
+  if (!S.token || !S.csvRows.length || !S.pipeline.length) return;
+  clearLog();
+  q('#download-area').classList.remove('show');
+  S.lastCsvB64 = null;
+  q('#run-btn').disabled = true;
+  q('#test-btn').disabled = true;
+
+  const csvToSend = testMode
+    ? [S.csvHeaders.join(','), Object.values(S.csvRows[0]).join(',')].join('\n')
+    : S.csvText;
+  const total = testMode ? 1 : S.csvRows.length;
+
+  q('#progress-wrap').style.display = 'block';
+  q('#progress-fill').style.width = '0%';
+  q('#progress-label').textContent = `0 / ${total}`;
+  q('#progress-pct').textContent = '0%';
+
+  log(`▶ Starting ${testMode ? 'test (1 row)' : 'full run (' + total + ' rows)'}…`, 'info');
+
+  const body = {
+    token: S.token, env: S.env, pipeline: S.pipeline,
+    csv_text: csvToSend, concurrency: S.concurrency, filename: S.filename,
+  };
+
+  try {
+    const resp = await fetch('/api/run', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(body),
+    });
+    if (!resp.ok) { log(`❌ Server error: ${resp.status}`, 'err'); return; }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, {stream: true});
+      const parts = buf.split('\n\n');
+      buf = parts.pop();
+      for (const part of parts) {
+        const line = part.replace(/^data:\s*/, '').trim();
+        if (!line) continue;
+        try {
+          const evt = JSON.parse(line);
+          handleSSE(evt, total);
+        } catch(e) {}
+      }
+    }
+  } catch(e) {
+    log(`❌ Connection error: ${e.message}`, 'err');
+  } finally {
+    q('#run-btn').disabled = false;
+    q('#test-btn').disabled = false;
+  }
+}
+
+function handleSSE(evt, total) {
+  if (evt.type === 'progress') {
+    const pct = total > 0 ? Math.round(evt.done / total * 100) : 0;
+    q('#progress-fill').style.width = pct + '%';
+    q('#progress-label').textContent = `${evt.done} / ${total}`;
+    q('#progress-pct').textContent = pct + '%';
+    q('#stat-done').textContent   = evt.done;
+    q('#stat-errors').textContent = evt.errors;
+    q('#stat-errors').style.color = evt.errors > 0 ? 'var(--danger)' : 'var(--success)';
+    q('#stat-eta').textContent    = fmtEta(evt.eta);
+    if (evt.done % 10 === 0 || evt.done <= 3) {
+      log(`✔ ${evt.done}/${total} rows — ${evt.errors} errors — ETA ${fmtEta(evt.eta)}`, 'ok');
+    }
+  } else if (evt.type === 'done') {
+    S.lastCsvB64 = evt.csv_b64;
+    S.lastFilename = evt.filename;
+    q('#download-area').classList.add('show');
+    q('#download-summary').textContent =
+      `${total} rows processed · ${evt.errors} errors · ready to download`;
+    q('#progress-fill').style.width = '100%';
+    q('#progress-label').textContent = `${total} / ${total}`;
+    q('#progress-pct').textContent = '100%';
+    log(`✅ Done! ${total} rows · ${evt.errors} errors`, 'ok');
+  } else if (evt.type === 'error') {
+    log(`❌ ${evt.message}`, 'err');
+  }
+}
+
+function doDownload() {
+  if (!S.lastCsvB64) return;
+  const bytes = atob(S.lastCsvB64);
+  const arr   = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+  const blob = new Blob([arr], {type:'text/csv'});
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = S.lastFilename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ══════════════════════════════════════════════════════════════════
+// CONCURRENCY
+// ══════════════════════════════════════════════════════════════════
+function setupConcurrency() {
+  q('#conc-slider').addEventListener('input', e => {
+    S.concurrency = parseInt(e.target.value);
+    q('#conc-val').textContent = S.concurrency;
+  });
+}
+
+// ══════════════════════════════════════════════════════════════════
+// RESET
+// ══════════════════════════════════════════════════════════════════
+function setupReset() {
+  q('#reset-btn').onclick = () => {
+    if (!confirm('Reset everything? Token and pipeline will be cleared.')) return;
+    localStorage.clear(); sessionStorage.clear();
+    location.reload();
+  };
+}
+</script>
+</body>
+</html>
