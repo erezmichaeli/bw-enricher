@@ -769,12 +769,27 @@ function parseSwagger(data) {
         if (p.in === 'path')  pathP.push(meta);
         if (p.in === 'query') queryP.push(meta);
       }
-      // extract output fields
+      // extract output fields from response schema
       let outputs = [];
+      let returnsFields = [];   // fields gated behind ?returns= param
       try {
         const sc200 = (op.responses?.['200']?.content?.['application/json']?.schema) || {};
         outputs = extractFields(sc200, data);
       } catch(e){}
+
+      // Check for a 'returns' query param — its enum lists all available fields
+      // These endpoints return only the fields you ask for via ?returns=field1,field2
+      const returnsParam = allParams.find(p => p.name === 'returns');
+      if (returnsParam) {
+        const rp = returnsParam.$ref ? (resolveRef(returnsParam.$ref, data) || returnsParam) : returnsParam;
+        const sc = rp.schema || {};
+        // enum may be on items (array of strings) or directly on schema
+        const enumVals = sc.items?.enum || sc.enum || rp.enum || [];
+        returnsFields = enumVals.filter(Boolean);
+        // merge into outputs so chips show them all
+        outputs = [...new Set([...outputs, ...returnsFields])];
+      }
+
       if (path.includes('identifier-search')) {
         outputs = [...new Set([...outputs,
           'company_id','security_id','trading_item_id','ticker_symbol',
@@ -794,6 +809,8 @@ function parseSwagger(data) {
         label: op.summary || path,
         path: pathP, query: queryP,
         outputs: [...new Set(outputs)].sort(),
+        returnsFields,   // fields that must be requested via ?returns= param
+        hasReturnsParam: returnsFields.length > 0,
         defaults: path.includes('identifier-search')
           ? [{json_field:'company_id',csv_column:'BW_ID'}]
           : [{json_field:'data',csv_column:'Output'}],
@@ -1158,10 +1175,56 @@ function renderParamsAndOutputs(path, conf, existing) {
     `<span class="field-chip" data-field="${f}">${f}</span>`
   ).join('');
   qq('.field-chip').forEach(c => {
-    c.onclick = () => addOutputRow(c.dataset.field, c.dataset.field);
+    c.onclick = () => {
+      addOutputRow(c.dataset.field, c.dataset.field);
+      triggerReturnsSync();
+    };
   });
 
   q('#outputs-section').style.display = 'block';
+
+  // If endpoint has a returns param, wire up auto-sync
+  if (conf.hasReturnsParam) {
+    q('#returns-hint')?.remove();
+    const hint = document.createElement('div');
+    hint.id = 'returns-hint';
+    hint.style.cssText = 'padding:8px 12px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:11px;color:#1e40af;margin-bottom:10px';
+    hint.innerHTML = '<b>💡 returns-controlled endpoint:</b> Click the field chips above to add fields. ' +
+      'The <code>?returns=</code> query param will be <b>automatically set</b> to match your output mapping — ' +
+      'no need to configure it manually.';
+    const outputsSection = q('#outputs-section');
+    const table = outputsSection.querySelector('table');
+    outputsSection.insertBefore(hint, table);
+    syncReturnsParam(conf);
+  }
+}
+
+// Reads current output rows and sets the returns query param accordingly
+function syncReturnsParam(conf) {
+  if (!conf?.hasReturnsParam) return;
+  const fields = qq('#output-rows .out-field').map(i => i.value.trim()).filter(Boolean);
+  // find the returns mode/col elements and set them
+  const modeEls = qq('#params-rows [data-pname="returns"][data-role="mode"]');
+  if (!modeEls.length) return;
+  const modeEl = modeEls[0];
+  const valEl  = qq('#params-rows [data-pname="returns"][data-role="val"]')[0];
+  if (!valEl) return;
+  if (fields.length) {
+    modeEl.value = 'static';
+    valEl.style.display = '';
+    valEl.value = fields.join(',');
+    // hide the returns row from the UI — it's managed automatically
+    const row = modeEl.closest('.param-row');
+    if (row) row.style.opacity = '0.45';
+    const label = row?.querySelector('.param-name');
+    if (label && !label.querySelector('.auto-badge')) {
+      const badge = document.createElement('span');
+      badge.className = 'auto-badge';
+      badge.style.cssText = 'font-size:9px;background:#bfdbfe;color:#1e40af;border-radius:3px;padding:1px 5px;margin-left:6px';
+      badge.textContent = 'auto';
+      label.appendChild(badge);
+    }
+  }
 }
 
 function buildParamRow(p, ptype, savedConf, availCols, isPrimary) {
@@ -1277,9 +1340,19 @@ function addOutputRow(field='', col='') {
   tr.innerHTML = `
     <td><input type="text" class="mono-input out-field" placeholder="e.g. analysis_score" value="${field}"/></td>
     <td><input type="text" class="out-col" placeholder="e.g. Score" value="${col}"/></td>
-    <td><button class="del-row-btn" onclick="this.closest('tr').remove()">✕</button></td>`;
+    <td><button class="del-row-btn" onclick="this.closest('tr').remove();triggerReturnsSync()">✕</button></td>`;
   tbody.appendChild(tr);
+  // wire up input change to auto-sync returns param
+  tr.querySelector('.out-field').addEventListener('input', triggerReturnsSync);
 }
+
+function triggerReturnsSync() {
+  const epConf = S.selectedEp ? findEpConf(S.selectedEp) : null;
+  if (epConf?.hasReturnsParam) syncReturnsParam(epConf);
+}
+
+// Also wire field chip clicks to trigger sync
+const _origChipClick = window._origChipClick;
 
 function collectParams() {
   const pathMap = {}, queryMap = {}, requiredMap = {};
