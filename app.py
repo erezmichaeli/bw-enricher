@@ -32,6 +32,8 @@ def resolve(conf, row):
     if not conf:
         return None
     t = conf.get("type")
+    if t == "skip":
+        return None
     v = conf.get("value", "")
     if t == "csv":
         cell = row.get(v, "")
@@ -232,8 +234,10 @@ def run():
                     if col not in out_cols:
                         out_cols.append(col)
 
+                row_err = (result_rows[i] or {}).get("enricher_error","").strip()
                 evt = {"type":"progress","done":done,"total":total,
-                       "errors":errors,"eta":round(eta,1)}
+                       "errors":errors,"eta":round(eta,1),
+                       "row_error": row_err if row_err else None}
                 yield f"data: {json.dumps(evt)}\n\n"
 
         # Build output CSV
@@ -246,7 +250,13 @@ def run():
         csv_b64 = base64.b64encode(buf.getvalue().encode()).decode()
         out_filename = f"{filename}_enriched.csv"
 
-        yield f"data: {json.dumps({'type':'done','csv_b64':csv_b64,'filename':out_filename,'errors':errors})}\n\n"
+        # collect per-row error details for the frontend summary panel
+        error_details = []
+        for i, r in enumerate(result_rows):
+            if r and r.get("enricher_error","").strip():
+                error_details.append({"row": i+1, "error": r["enricher_error"].strip()})
+
+        yield f"data: {json.dumps({'type':'done','csv_b64':csv_b64,'filename':out_filename,'errors':errors,'error_details':error_details})}\n\n"
 
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache",

@@ -541,6 +541,21 @@ select{cursor:pointer}
           <div id="log-wrap"><div class="log-line info">Ready. Configure your pipeline and click Run.</div></div>
         </div>
 
+        <div id="error-summary" style="display:none;margin-bottom:16px">
+          <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;overflow:hidden">
+            <div style="padding:10px 14px;display:flex;justify-content:space-between;align-items:center;
+              cursor:pointer;user-select:none" id="error-summary-toggle">
+              <span style="font-size:13px;font-weight:700;color:#991b1b" id="error-summary-title">
+                ⚠️ 0 rows had errors
+              </span>
+              <span style="font-size:11px;color:#dc2626;font-weight:600">▼ Show details</span>
+            </div>
+            <div id="error-summary-body" style="display:none;border-top:1px solid #fecaca;
+              max-height:240px;overflow-y:auto;padding:10px 14px;font-family:var(--mono);font-size:11px;
+              line-height:1.8;color:#7f1d1d"></div>
+          </div>
+        </div>
+
         <div id="download-area">
           <h3>✅ Enrichment complete</h3>
           <p id="download-summary"></p>
@@ -891,6 +906,12 @@ function savePipeline() {
   sessionStorage.setItem('bw_pipeline', JSON.stringify(S.pipeline));
 }
 
+function editStep(idx) {
+  goTab('build');
+  // small delay so the tab switch + refreshBuildPanel completes before openForm
+  setTimeout(() => openForm(idx), 30);
+}
+
 function renderSidebar() {
   const list = q('#sb-steps-list');
   if (!S.pipeline.length) {
@@ -1147,14 +1168,16 @@ function buildParamRow(p, ptype, savedConf, availCols, isPrimary) {
   const isEnum = enums.length > 0;
 
   if (isEnum) {
-    // mode toggle: static dropdown or csv column
+    // mode toggle: static dropdown, csv column, or skip (optional only)
     const modeSelect = el('select');
-    modeSelect.style.cssText = 'width:90px;font-size:12px;padding:6px 8px';
-    modeSelect.innerHTML = `<option value="static">Value</option><option value="csv">Column</option>`;
+    modeSelect.style.cssText = 'width:110px;font-size:12px;padding:6px 8px';
+    modeSelect.innerHTML = `<option value="static">Value</option><option value="csv">Column</option>`
+      + (!isPrimary ? `<option value="skip">Don't send</option>` : '');
     const valSelect = el('select');
     valSelect.style.cssText = 'flex:1;font-size:12px;padding:6px 8px';
 
     const refreshEnumVal = (mode) => {
+      valSelect.style.display = mode === 'skip' ? 'none' : '';
       valSelect.innerHTML = '';
       if (mode === 'static') {
         enums.forEach(v => {
@@ -1162,7 +1185,7 @@ function buildParamRow(p, ptype, savedConf, availCols, isPrimary) {
           o.value = v; o.textContent = v; valSelect.appendChild(o);
         });
         if (savedConf?.type === 'static') valSelect.value = savedConf.value;
-      } else {
+      } else if (mode === 'csv') {
         availCols.forEach(c => {
           const o = document.createElement('option');
           o.value = c; o.textContent = c; valSelect.appendChild(o);
@@ -1171,7 +1194,10 @@ function buildParamRow(p, ptype, savedConf, availCols, isPrimary) {
       }
     };
 
-    const initMode = savedConf?.type === 'csv' ? 'csv' : 'static';
+    // optional params default to "Don't send" unless previously saved
+    const initMode = savedConf?.type === 'csv' ? 'csv'
+      : savedConf?.type === 'static' ? 'static'
+      : (!isPrimary ? 'skip' : 'static');
     modeSelect.value = initMode;
     refreshEnumVal(initMode);
     modeSelect.onchange = () => refreshEnumVal(modeSelect.value);
@@ -1184,10 +1210,11 @@ function buildParamRow(p, ptype, savedConf, availCols, isPrimary) {
     inputWrap.appendChild(modeSelect);
     inputWrap.appendChild(valSelect);
   } else {
-    // mode: column or static text
+    // mode: column, static text, or skip (optional only)
     const modeSelect = el('select');
-    modeSelect.style.cssText = 'width:100px;font-size:12px;padding:6px 8px';
-    modeSelect.innerHTML = `<option value="csv">Column</option><option value="static">Static</option>`;
+    modeSelect.style.cssText = 'width:110px;font-size:12px;padding:6px 8px';
+    modeSelect.innerHTML = `<option value="csv">Column</option><option value="static">Static</option>`
+      + (!isPrimary ? `<option value="skip">Don't send</option>` : '');
 
     const valInput = el('input','');
     valInput.type = 'text'; valInput.style.cssText = 'flex:1;font-size:12px';
@@ -1205,14 +1232,14 @@ function buildParamRow(p, ptype, savedConf, availCols, isPrimary) {
       colSelect.style.display = mode === 'csv'    ? '' : 'none';
     };
 
-    let initMode = 'csv';
+    // optional params default to "Don't send" unless previously saved
+    let initMode = !isPrimary ? 'skip' : 'csv';
     if (savedConf?.type === 'static') { initMode = 'static'; valInput.value = savedConf.value; }
-    else if (savedConf?.type === 'csv') {
-      initMode = 'csv'; colSelect.value = savedConf.value;
-    } else {
-      // auto-match column name
+    else if (savedConf?.type === 'csv') { initMode = 'csv'; colSelect.value = savedConf.value; }
+    else if (!savedConf && isPrimary) {
+      // auto-match column name for required params only
       const match = availCols.find(c => c.toLowerCase().includes(p.name.toLowerCase()));
-      if (match) colSelect.value = match;
+      if (match) { initMode = 'csv'; colSelect.value = match; }
     }
     modeSelect.value = initMode;
     refreshMode(initMode);
@@ -1246,7 +1273,6 @@ function addOutputRow(field='', col='') {
 
 function collectParams() {
   const pathMap = {}, queryMap = {}, requiredMap = {};
-  // collect from param rows
   const rows = qq('#params-rows .param-row');
   for (const row of rows) {
     const modeEl = row.querySelector('[data-role="mode"]');
@@ -1257,15 +1283,23 @@ function collectParams() {
     const pname = modeEl.dataset.pname;
     const mode  = modeEl.value;
     let conf = null;
-    if (mode === 'static') {
+    if (mode === 'skip') {
+      // explicitly don't send — store skip marker so backend knows it was intentional
+      conf = {type:'skip'};
+    } else if (mode === 'static') {
       const v = valEl?.value?.trim();
       if (v) conf = {type:'static', value:v};
     } else {
+      // csv
       const v = (colEl || valEl)?.value;
       if (v) conf = {type:'csv', value:v};
     }
-    if (ptype === 'path')  pathMap[pname]  = conf;
-    if (ptype === 'query') { queryMap[pname] = conf; requiredMap[pname] = true; }
+    if (ptype === 'path')  pathMap[pname] = conf;
+    if (ptype === 'query') {
+      queryMap[pname] = conf;
+      // only mark as required if user actually mapped it (not skipped)
+      if (mode !== 'skip') requiredMap[pname] = true;
+    }
   }
   return {pathMap, queryMap, requiredMap};
 }
@@ -1385,6 +1419,9 @@ async function startRun(testMode) {
   }
 }
 
+// accumulate per-row errors for the summary panel
+const _rowErrors = [];
+
 function handleSSE(evt, total) {
   if (evt.type === 'progress') {
     const pct = total > 0 ? Math.round(evt.done / total * 100) : 0;
@@ -1395,8 +1432,15 @@ function handleSSE(evt, total) {
     q('#stat-errors').textContent = evt.errors;
     q('#stat-errors').style.color = evt.errors > 0 ? 'var(--danger)' : 'var(--success)';
     q('#stat-eta').textContent    = fmtEta(evt.eta);
-    if (evt.done % 10 === 0 || evt.done <= 3) {
+    // log every row in test mode, every 10 rows otherwise
+    if (total <= 1 || evt.done % 10 === 0 || evt.done <= 3) {
       log(`✔ ${evt.done}/${total} rows — ${evt.errors} errors — ETA ${fmtEta(evt.eta)}`, 'ok');
+    }
+    // stream per-row errors live to log
+    if (evt.row_error) {
+      const msg = `Row ${evt.done} error: ${evt.row_error}`;
+      log(msg, 'err');
+      _rowErrors.push({row: evt.done, error: evt.row_error});
     }
   } else if (evt.type === 'done') {
     S.lastCsvB64 = evt.csv_b64;
@@ -1408,10 +1452,39 @@ function handleSSE(evt, total) {
     q('#progress-label').textContent = `${total} / ${total}`;
     q('#progress-pct').textContent = '100%';
     log(`✅ Done! ${total} rows · ${evt.errors} errors`, 'ok');
+
+    // show error summary panel if there were errors
+    if (evt.errors > 0 && evt.error_details?.length) {
+      const panel = q('#error-summary');
+      const title = q('#error-summary-title');
+      const body  = q('#error-summary-body');
+      title.textContent = `⚠️ ${evt.errors} row${evt.errors>1?'s':''} had errors — expand to review`;
+      body.innerHTML = evt.error_details.map(e =>
+        `<div style="padding:3px 0;border-bottom:1px solid rgba(220,38,38,.1)">
+          <span style="color:#dc2626;font-weight:600">Row ${e.row}:</span>
+          <span style="color:#7f1d1d"> ${e.error}</span>
+        </div>`
+      ).join('');
+      panel.style.display = 'block';
+    }
   } else if (evt.type === 'error') {
     log(`❌ ${evt.message}`, 'err');
   }
 }
+
+// wire up error summary toggle
+document.addEventListener('DOMContentLoaded', () => {
+  const toggle = q('#error-summary-toggle');
+  if (toggle) {
+    toggle.onclick = () => {
+      const body = q('#error-summary-body');
+      const arrow = toggle.querySelector('span:last-child');
+      const open = body.style.display === 'none';
+      body.style.display = open ? 'block' : 'none';
+      arrow.textContent = open ? '▲ Hide details' : '▼ Show details';
+    };
+  }
+});
 
 function doDownload() {
   if (!S.lastCsvB64) return;
