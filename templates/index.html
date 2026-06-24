@@ -810,7 +810,7 @@ function parseSwagger(data) {
         path: pathP, query: queryP,
         outputs: [...new Set(outputs)].sort(),
         returnsFields,   // fields that must be requested via ?returns= param
-        hasReturnsParam: returnsFields.length > 0,
+        hasReturnsParam: !!returnsParam,   // true even when no enum — user types fields manually
         defaults: path.includes('identifier-search')
           ? [{json_field:'company_id',csv_column:'BW_ID'}]
           : [{json_field:'data',csv_column:'Output'}],
@@ -1183,48 +1183,131 @@ function renderParamsAndOutputs(path, conf, existing) {
 
   q('#outputs-section').style.display = 'block';
 
-  // If endpoint has a returns param, wire up auto-sync
+  // If endpoint has a returns param, replace the param row with a smart field picker
   if (conf.hasReturnsParam) {
     q('#returns-hint')?.remove();
+
+    // Remove the returns param row from the standard params UI — we handle it ourselves
+    const returnsRow = qq('#params-rows .param-row').find(r =>
+      r.querySelector('[data-pname="returns"]'));
+    if (returnsRow) returnsRow.remove();
+
+    // Build a dedicated "fields to request" UI above the output table
+    const outputsSection = q('#outputs-section');
     const hint = document.createElement('div');
     hint.id = 'returns-hint';
-    hint.style.cssText = 'padding:8px 12px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;font-size:11px;color:#1e40af;margin-bottom:10px';
-    hint.innerHTML = '<b>💡 returns-controlled endpoint:</b> Click the field chips above to add fields. ' +
-      'The <code>?returns=</code> query param will be <b>automatically set</b> to match your output mapping — ' +
-      'no need to configure it manually.';
-    const outputsSection = q('#outputs-section');
-    const table = outputsSection.querySelector('table');
+    hint.style.cssText = 'margin-bottom:14px';
+
+    const savedReturns = existing?.query_map?.returns?.value || '';
+    const savedFieldsList = savedReturns ? savedReturns.split(',').map(s=>s.trim()).filter(Boolean) : [];
+
+    hint.innerHTML = `
+      <div style="padding:10px 14px;border-radius:10px;background:#eff6ff;border:1px solid #bfdbfe">
+        <div style="font-size:11px;font-weight:700;color:#1e40af;margin-bottom:8px">
+          📋 Fields to request <span style="font-weight:400;color:#3b82f6">(controls <code>?returns=</code> automatically)</span>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="returns-field-input" type="text"
+            style="flex:1;min-width:180px;padding:7px 10px;border:1px solid #bfdbfe;border-radius:7px;
+              font-family:var(--mono);font-size:12px;background:white"
+            placeholder="Type a field name and press Enter or comma…"/>
+          <button id="returns-add-btn" style="padding:7px 14px;border-radius:7px;border:none;
+            background:var(--accent);color:white;font-size:12px;font-weight:600;cursor:pointer">
+            Add
+          </button>
+        </div>
+        <div id="returns-tags" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+          ${savedFieldsList.map(f => returnsTagHTML(f)).join('')}
+        </div>
+        <div style="font-size:10px;color:#6b7280;margin-top:6px">
+          Each field you add here will appear as an output column AND be requested from the API.
+          ${conf.returnsFields?.length ? 'Known fields: <b>' + conf.returnsFields.slice(0,12).join(', ') + (conf.returnsFields.length > 12 ? '…' : '') + '</b>' : 'Type field names as shown in the API docs.'}
+        </div>
+      </div>`;
+
+    const table = outputsSection.querySelector('table.output-table');
     outputsSection.insertBefore(hint, table);
-    syncReturnsParam(conf);
+
+    // wire up the add button and enter key
+    const inp = q('#returns-field-input');
+    const addBtn = q('#returns-add-btn');
+    const addReturnField = () => {
+      const raw = inp.value.trim();
+      if (!raw) return;
+      // support comma-separated paste
+      raw.split(',').map(s=>s.trim()).filter(Boolean).forEach(f => {
+        addReturnsTag(f);
+        syncOutputRowFromReturns(f);
+      });
+      inp.value = '';
+      syncReturnsParamFromTags();
+    };
+    addBtn.onclick = addReturnField;
+    inp.onkeydown = e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addReturnField(); } };
+
+    // restore saved fields as output rows
+    savedFieldsList.forEach(f => syncOutputRowFromReturns(f));
   }
+}
+
+function returnsTagHTML(field) {
+  return `<span class="returns-tag" style="display:inline-flex;align-items:center;gap:5px;
+    padding:3px 9px;border-radius:999px;background:#dbeafe;border:1px solid #bfdbfe;
+    font-family:var(--mono);font-size:11px;color:#1e40af">
+    ${field}
+    <span onclick="removeReturnsTag('${field}')"
+      style="cursor:pointer;font-size:13px;color:#93c5fd;line-height:1">×</span>
+  </span>`;
+}
+
+function addReturnsTag(field) {
+  const container = q('#returns-tags');
+  if (!container) return;
+  // don't add duplicates
+  if ([...container.querySelectorAll('.returns-tag')].some(t => t.textContent.trim().replace('×','').trim() === field)) return;
+  const span = document.createElement('span');
+  span.innerHTML = returnsTagHTML(field);
+  container.appendChild(span.firstElementChild);
+}
+
+function removeReturnsTag(field) {
+  const container = q('#returns-tags');
+  if (!container) return;
+  [...container.querySelectorAll('.returns-tag')].forEach(t => {
+    if (t.textContent.trim().replace('×','').trim() === field) t.remove();
+  });
+  // also remove the corresponding output row
+  qq('#output-rows .out-field').forEach(inp => {
+    if (inp.value.trim() === field) inp.closest('tr').remove();
+  });
+  syncReturnsParamFromTags();
+}
+
+function syncOutputRowFromReturns(field) {
+  // add an output row if one doesn't exist yet
+  const exists = qq('#output-rows .out-field').some(i => i.value.trim() === field);
+  if (!exists) addOutputRow(field, field);
+}
+
+function syncReturnsParamFromTags() {
+  // collect tags → build comma string → store in a hidden input for collectParams to pick up
+  const tags = [...qq('#returns-tags .returns-tag')]
+    .map(t => t.textContent.trim().replace('×','').trim()).filter(Boolean);
+  let hidden = q('#returns-hidden-value');
+  if (!hidden) {
+    hidden = document.createElement('input');
+    hidden.id = 'returns-hidden-value';
+    hidden.type = 'hidden';
+    hidden.dataset.pname = 'returns';
+    hidden.dataset.ptype = 'query';
+    q('#params-rows').appendChild(hidden);
+  }
+  hidden.value = tags.join(',');
 }
 
 // Reads current output rows and sets the returns query param accordingly
 function syncReturnsParam(conf) {
-  if (!conf?.hasReturnsParam) return;
-  const fields = qq('#output-rows .out-field').map(i => i.value.trim()).filter(Boolean);
-  // find the returns mode/col elements and set them
-  const modeEls = qq('#params-rows [data-pname="returns"][data-role="mode"]');
-  if (!modeEls.length) return;
-  const modeEl = modeEls[0];
-  const valEl  = qq('#params-rows [data-pname="returns"][data-role="val"]')[0];
-  if (!valEl) return;
-  if (fields.length) {
-    modeEl.value = 'static';
-    valEl.style.display = '';
-    valEl.value = fields.join(',');
-    // hide the returns row from the UI — it's managed automatically
-    const row = modeEl.closest('.param-row');
-    if (row) row.style.opacity = '0.45';
-    const label = row?.querySelector('.param-name');
-    if (label && !label.querySelector('.auto-badge')) {
-      const badge = document.createElement('span');
-      badge.className = 'auto-badge';
-      badge.style.cssText = 'font-size:9px;background:#bfdbfe;color:#1e40af;border-radius:3px;padding:1px 5px;margin-left:6px';
-      badge.textContent = 'auto';
-      label.appendChild(badge);
-    }
-  }
+  // legacy — now handled by syncReturnsParamFromTags
 }
 
 function buildParamRow(p, ptype, savedConf, availCols, isPrimary) {
@@ -1347,12 +1430,8 @@ function addOutputRow(field='', col='') {
 }
 
 function triggerReturnsSync() {
-  const epConf = S.selectedEp ? findEpConf(S.selectedEp) : null;
-  if (epConf?.hasReturnsParam) syncReturnsParam(epConf);
+  // no-op for tag-based returns UI — sync happens via syncReturnsParamFromTags()
 }
-
-// Also wire field chip clicks to trigger sync
-const _origChipClick = window._origChipClick;
 
 function collectParams() {
   const pathMap = {}, queryMap = {}, requiredMap = {};
@@ -1367,22 +1446,24 @@ function collectParams() {
     const mode  = modeEl.value;
     let conf = null;
     if (mode === 'skip') {
-      // explicitly don't send — store skip marker so backend knows it was intentional
       conf = {type:'skip'};
     } else if (mode === 'static') {
       const v = valEl?.value?.trim();
       if (v) conf = {type:'static', value:v};
     } else {
-      // csv
       const v = (colEl || valEl)?.value;
       if (v) conf = {type:'csv', value:v};
     }
     if (ptype === 'path')  pathMap[pname] = conf;
     if (ptype === 'query') {
       queryMap[pname] = conf;
-      // only mark as required if user actually mapped it (not skipped)
       if (mode !== 'skip') requiredMap[pname] = true;
     }
+  }
+  // pick up the returns hidden value (set by tag picker UI)
+  const returnsHidden = q('#returns-hidden-value');
+  if (returnsHidden && returnsHidden.value) {
+    queryMap['returns'] = {type:'static', value: returnsHidden.value};
   }
   return {pathMap, queryMap, requiredMap};
 }
