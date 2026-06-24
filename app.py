@@ -182,7 +182,8 @@ def extract_first_match(data, j_key):
     candidates = ([primary] if primary else []) + [i for i in data if i != primary and isinstance(i, dict)]
     for item in candidates:
         val = extract(item, j_key)
-        if val not in ("", None):
+        # Explicitly check for missing — False, 0, empty list are valid values
+        if val != "" and val is not None:
             return val
     return ""
 
@@ -260,8 +261,9 @@ def process_row(row, steps, base_url, token):
                             val = extract_first_match(data, j_key)
                             row[c_col] = val
                             row["_debug_log"].append(f"  → identifier-search: '{j_key}' = '{val}' → col '{c_col}'")
-                            if not val:
-                                row["enricher_error"] += f"[{label}: field '{j_key}' empty in identifier-search result — check if correct field (fund_id vs company_id)] "
+                            # Only flag as error if truly missing (not just falsy)
+                            if val == "" or val is None:
+                                row["enricher_error"] += f"[{label}: field '{j_key}' not found in identifier-search result — check field name (fund_id vs company_id)] "
 
                 # ── array: fan out or take first based on array_mode ──────
                 # Also handles paginated screener responses: {data: [...], total_count: N}
