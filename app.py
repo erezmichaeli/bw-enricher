@@ -106,6 +106,67 @@ def extract(payload, path):
             return ""
     return json.dumps(val) if isinstance(val, (dict, list)) else val
 
+# Priority-ordered list of fields to use as array item suffix.
+# First field found in an item wins. Ordered from most-specific to most-generic.
+_SUFFIX_FIELD_PRIORITY = [
+    # BW-specific discriminators
+    "paragraph_type",       # /paragraphs endpoints
+    "section_type",         # section-based arrays
+    "period_type",          # period arrays (quarterly/annually)
+    "change_type",          # policy change arrays
+    "policy_type",          # policy arrays
+    "event_type",           # event arrays
+    "metric_type",          # metric arrays
+    "analysis_type",        # analysis arrays (only if unique per item)
+    # ID-based discriminators (unique but long)
+    "event_id",             # event lists
+    "trading_item_id",      # trading item arrays
+    "security_id",          # security arrays
+    "company_id",           # company lists
+    "fund_id",              # fund lists
+    # Date-based discriminators
+    "effective_date",       # policy/change effective date
+    "filing_date",          # filing date
+    "date",                 # generic date
+    # Name-based (less reliable — may not be unique)
+    "analyst_name",         # price target analyst
+    "exchange_name",        # exchange arrays
+    "category",             # generic category
+    "scoring_method",       # esg scoring method
+    # Final fallbacks
+    "type",
+    "name",
+    "code",
+    "id",
+]
+
+def _make_array_suffix(item, index, full_array):
+    """
+    Pick the best unique suffix for a fan-out column name.
+    Priority:
+      1. paragraph_type / section_type / type discriminator fields
+      2. year + quarter  (e.g. 2024_Q3)
+      3. year only
+      4. numeric index fallback
+    """
+    # Try discriminator fields first (paragraph_type, section_type, etc.)
+    for field in _SUFFIX_FIELD_PRIORITY:
+        val = item.get(field)
+        if val and isinstance(val, str) and val.strip():
+            return val.strip().replace(" ", "_")
+
+    # Fall back to year+quarter
+    yr  = item.get("year")
+    qtr = item.get("quarter")
+    if yr is not None and qtr is not None:
+        return f"{int(yr)}_Q{int(qtr)}"
+    if yr is not None:
+        return str(int(yr))
+
+    # Final fallback: numeric index
+    return str(index)
+
+
 def is_identifier_search(url_template):
     """identifier-search is special: returns an array but we want the first
     matching result's scalar fields, not fan-out columns."""
@@ -202,30 +263,47 @@ def process_row(row, steps, base_url, token):
                             if not val:
                                 row["enricher_error"] += f"[{label}: field '{j_key}' empty in identifier-search result — check if correct field (fund_id vs company_id)] "
 
-                # ── time-series array: fan out into year_Q# columns ───────
-                elif isinstance(data, list) and data and isinstance(data[0], dict) and (
-                    "year" in data[0] or "quarter" in data[0]):
+                # ── array: fan out or take first based on array_mode ──────
+                # Also handles paginated screener responses: {data: [...], total_count: N}
+                elif (
+                    (isinstance(data, list) and data and isinstance(data[0], dict)) or
+                    (isinstance(data, dict) and isinstance(data.get('data'), list) and data['data'])
+                ):
+                    # Unwrap screener-style {data: [...]} envelope
+                    if isinstance(data, dict) and isinstance(data.get('data'), list):
+                        data = data['data']
+                    array_mode = step.get("array_mode", "columns")
+                    # "first"   — take only the first item (single value per column)
+                    # "columns" — fan out: one column per item, suffixed by discriminator
+                    # "concat"  — join all values with " | " into one column
                     for out in step.get("output_map", []):
                         j_key = (out.get("json_field") or "").strip()
                         c_col = (out.get("csv_column") or "").strip()
                         if not j_key or not c_col:
                             continue
-                        for item in data:
-                            if not isinstance(item, dict):
-                                continue
-                            yr  = item.get("year")
-                            qtr = item.get("quarter")
-                            if yr is not None and qtr is not None:
-                                suffix = f"{int(yr)}_Q{int(qtr)}"
-                            elif yr is not None:
-                                suffix = str(int(yr))
-                            else:
-                                suffix = str(data.index(item))
-                            row[f"{c_col}_{suffix}"] = extract(item, j_key)
+
+                        if array_mode == "first":
+                            row[c_col] = extract(data[0], j_key)
+
+                        elif array_mode == "concat":
+                            sep = step.get("array_concat_sep", " | ")
+                            vals = [str(extract(item, j_key)) for item in data
+                                    if isinstance(item, dict)]
+                            row[c_col] = sep.join(v for v in vals if v)
+
+                        else:  # "columns" — default fan-out
+                            seen_suffixes = {}
+                            for i, item in enumerate(data):
+                                if not isinstance(item, dict):
+                                    continue
+                                suffix = _make_array_suffix(item, i, data)
+                                if suffix in seen_suffixes:
+                                    suffix = f"{suffix}_{i}"
+                                seen_suffixes[suffix] = True
+                                row[f"{c_col}_{suffix}"] = extract(item, j_key)
 
                 # ── single object ─────────────────────────────────────────
                 else:
-                    # if it's a plain list (not time-series), take first item
                     payload = data[0] if isinstance(data, list) and data else data
                     for out in step.get("output_map", []):
                         j_key = (out.get("json_field") or "").strip()
