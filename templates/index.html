@@ -755,10 +755,18 @@ function parseSwagger(data) {
     for (const op of ops) {
       const cat = (op.tags || ['Other'])[0];
       if (!specs[cat]) specs[cat] = {};
-      const allParams = [...pathLevelParams, ...(op.parameters || [])];
+      // Merge path-level and op-level params; op-level takes precedence (dedup by name+in)
+      const opParams = (op.parameters || []).map(p => p.$ref ? (resolveRef(p.$ref, data)||p) : p);
+      const opParamKeys = new Set(opParams.map(p => `${p.name}|${p.in}`));
+      const mergedParams = [
+        ...pathLevelParams
+          .map(p => p.$ref ? (resolveRef(p.$ref, data)||p) : p)
+          .filter(p => !opParamKeys.has(`${p.name}|${p.in}`)),  // skip if overridden
+        ...opParams,
+      ];
+      const allParams = mergedParams;
       const pathP = [], queryP = [];
-      for (let p of allParams) {
-        if (p.$ref) p = resolveRef(p.$ref, data) || p;
+      for (const p of allParams) {
         const sc = p.schema || {};
         const meta = {
           name: p.name, desc: p.description || '',
@@ -777,8 +785,13 @@ function parseSwagger(data) {
         outputs = extractFields(sc200, data);
       } catch(e){}
 
-      // Check for a 'returns' query param — pull field names from every possible source
-      const returnsParam = allParams.find(p => p.name === 'returns');
+      // Check for a 'returns' query param — operation-level params only
+      // (path-level params are shared across operations and should not trigger the returns UI)
+      const opLevelParams = op.parameters || [];
+      const opLevelParamsResolved = opLevelParams.map(p =>
+        p.$ref ? (resolveRef(p.$ref, data) || p) : p
+      );
+      const returnsParam = opLevelParamsResolved.find(p => p.name === 'returns');
       if (returnsParam) {
         returnsFields = resolveReturnsFields(returnsParam, data, outputs);
         outputs = [...new Set([...outputs, ...returnsFields])];
