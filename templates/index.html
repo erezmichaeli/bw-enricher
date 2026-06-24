@@ -777,16 +777,10 @@ function parseSwagger(data) {
         outputs = extractFields(sc200, data);
       } catch(e){}
 
-      // Check for a 'returns' query param — its enum lists all available fields
-      // These endpoints return only the fields you ask for via ?returns=field1,field2
+      // Check for a 'returns' query param — pull field names from every possible source
       const returnsParam = allParams.find(p => p.name === 'returns');
       if (returnsParam) {
-        const rp = returnsParam.$ref ? (resolveRef(returnsParam.$ref, data) || returnsParam) : returnsParam;
-        const sc = rp.schema || {};
-        // enum may be on items (array of strings) or directly on schema
-        const enumVals = sc.items?.enum || sc.enum || rp.enum || [];
-        returnsFields = enumVals.filter(Boolean);
-        // merge into outputs so chips show them all
+        returnsFields = resolveReturnsFields(returnsParam, data, outputs);
         outputs = [...new Set([...outputs, ...returnsFields])];
       }
 
@@ -827,18 +821,72 @@ function resolveRef(ref, root) {
 }
 
 function extractFields(schema, root, visited=new Set(), depth=0) {
-  if (depth > 12 || !schema) return [];
+  if (depth > 15 || !schema) return [];
+  // resolve $ref first
   if (schema.$ref) {
     const k = schema.$ref.split('/').pop();
     if (visited.has(k)) return [];
     visited.add(k);
-    return extractFields(root?.components?.schemas?.[k]||{}, root, visited, depth+1);
+    const resolved = root?.components?.schemas?.[k] || {};
+    return extractFields(resolved, root, visited, depth+1);
   }
-  if (schema.type==='array' && schema.items) return extractFields(schema.items,root,visited,depth+1);
   const fields = [];
-  if (schema.properties) fields.push(...Object.keys(schema.properties));
-  if (schema.allOf) for (const s of schema.allOf) fields.push(...extractFields(s,root,visited,depth+1));
-  return fields;
+  // unwrap array
+  if (schema.type === 'array' && schema.items)
+    return extractFields(schema.items, root, visited, depth+1);
+  // direct properties
+  if (schema.properties)
+    fields.push(...Object.keys(schema.properties));
+  // additionalProperties can be a schema with properties
+  if (schema.additionalProperties && typeof schema.additionalProperties === 'object')
+    fields.push(...extractFields(schema.additionalProperties, root, visited, depth+1));
+  // allOf / anyOf / oneOf
+  for (const key of ['allOf','anyOf','oneOf']) {
+    if (Array.isArray(schema[key]))
+      for (const s of schema[key])
+        fields.push(...extractFields(s, root, visited, depth+1));
+  }
+  return [...new Set(fields)];
+}
+
+// Extract field names from a free-text description like:
+// "Available fields: foo, bar, baz_qux. Use comma-separated values."
+function extractFieldsFromDescription(desc) {
+  if (!desc) return [];
+  const fields = [];
+  // match snake_case / camelCase / dot.notation tokens that look like field names
+  // look for patterns after keywords like "fields:", "values:", "options:", "returns:"
+  const patterns = [
+    /(?:fields?|values?|options?|returns?|available)[:\s]+([a-z_][a-z0-9_.]+(?:[,\s]+[a-z_][a-z0-9_.]+)*)/gi,
+    /`([a-z_][a-z0-9_.]+)`/g,  // backtick-wrapped names
+  ];
+  for (const re of patterns) {
+    let m;
+    re.lastIndex = 0;
+    while ((m = re.exec(desc)) !== null) {
+      m[1].split(/[,\s]+/).forEach(t => {
+        t = t.trim().replace(/[^a-z0-9_.]/gi,'');
+        if (t.length > 1 && t.includes('_') || t.length > 3)
+          fields.push(t);
+      });
+    }
+  }
+  return [...new Set(fields)];
+}
+
+// Resolve ALL possible swagger sources for a returns-gated param's field list
+function resolveReturnsFields(returnsParam, data, responseFields) {
+  if (!returnsParam) return [];
+  const rp = returnsParam.$ref ? (resolveRef(returnsParam.$ref, data) || returnsParam) : returnsParam;
+  const sc = rp.schema || {};
+  const out = new Set();
+  for (const v of (sc.enum || rp.enum || [])) out.add(v);
+  for (const v of (sc.items?.enum || [])) out.add(v);
+  if (sc.items?.$ref) { const r = resolveRef(sc.items.$ref, data)||{}; for (const v of (r.enum||[])) out.add(v); }
+  if (sc.$ref) { const r = resolveRef(sc.$ref, data)||{}; for (const v of (r.enum||r.items?.enum||[])) out.add(v); }
+  for (const v of extractFieldsFromDescription(rp.description || sc.description || '')) out.add(v);
+  for (const v of responseFields) out.add(v);
+  return [...out].filter(Boolean).sort();
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1221,7 +1269,16 @@ function renderParamsAndOutputs(path, conf, existing) {
         </div>
         <div style="font-size:10px;color:#6b7280;margin-top:6px">
           Each field you add here will appear as an output column AND be requested from the API.
-          ${conf.returnsFields?.length ? 'Known fields: <b>' + conf.returnsFields.slice(0,12).join(', ') + (conf.returnsFields.length > 12 ? '…' : '') + '</b>' : 'Type field names as shown in the API docs.'}
+          ${conf.returnsFields?.length
+            ? '<div style="margin-top:8px"><span style="font-size:10px;color:#4b5563;font-weight:600">Click to add: </span><br/>' +
+              conf.returnsFields.map(f =>
+                '<span onclick="addReturnsTag(\'' + f + '\');syncOutputRowFromReturns(\'' + f + '\');syncReturnsParamFromTags()" ' +
+                'style="display:inline-flex;align-items:center;padding:2px 8px;margin:2px 3px 2px 0;' +
+                'border-radius:5px;background:#dbeafe;border:1px solid #93c5fd;' +
+                'font-family:var(--mono);font-size:10px;color:#1e40af;cursor:pointer" ' +
+                'title="Click to add">' + f + '</span>'
+              ).join('') + '</div>'
+            : '<span>Type field names from the API docs. Check Bridgewise Swagger UI for the full list.</span>'}
         </div>
       </div>`;
 
