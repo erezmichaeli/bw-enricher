@@ -302,7 +302,14 @@ def process_row(row, steps, base_url, token):
                                 if suffix in seen_suffixes:
                                     suffix = f"{suffix}_{i}"
                                 seen_suffixes[suffix] = True
-                                row[f"{c_col}_{suffix}"] = extract(item, j_key)
+                                val = extract(item, j_key)
+                                # Skip columns where value == suffix (e.g. paragraph_type
+                                # fanning out: col "paragraph_type_fund_highlights_rec"
+                                # with value "fund_highlights_rec" — pure noise, type is
+                                # already in the column name)
+                                if str(val) == suffix:
+                                    continue
+                                row[f"{c_col}_{suffix}"] = val
 
                 # ── single object ─────────────────────────────────────────
                 else:
