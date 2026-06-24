@@ -40,6 +40,58 @@ def resolve(conf, row):
         return None if (cell == "" or cell is None) else str(cell)
     return str(v) if v != "" else None
 
+def parse_error_body(resp):
+    """Extract the richest possible error description from an API error response."""
+    if resp is None:
+        return "Request timed out after retries"
+    try:
+        body = resp.json()
+    except Exception:
+        # Not JSON — return raw text, cleaned up
+        raw = resp.text.strip()
+        return raw[:500] if raw else f"HTTP {resp.status_code} (empty body)"
+
+    if not isinstance(body, dict):
+        return str(body)[:500]
+
+    parts = []
+
+    # Top-level message / detail
+    for key in ("message", "detail", "error", "error_description", "title"):
+        val = body.get(key)
+        if val and isinstance(val, str):
+            parts.append(val)
+            break  # one top-level message is enough
+
+    # Validation errors — common in BW: {"errors": [{"field": "x", "message": "y"}]}
+    for key in ("errors", "validation_errors", "fields"):
+        errs = body.get(key)
+        if isinstance(errs, list):
+            for e in errs[:5]:  # cap at 5
+                if isinstance(e, dict):
+                    field = e.get("field") or e.get("loc") or e.get("param") or ""
+                    msg   = e.get("message") or e.get("msg") or e.get("description") or str(e)
+                    parts.append(f"  • {field}: {msg}" if field else f"  • {msg}")
+                else:
+                    parts.append(f"  • {e}")
+        elif isinstance(errs, dict):
+            for field, msg in list(errs.items())[:5]:
+                parts.append(f"  • {field}: {msg}")
+
+    # Any other top-level keys that look informative
+    for key in ("reason", "code", "status", "type"):
+        val = body.get(key)
+        if val and str(val) not in " ".join(parts):
+            parts.append(f"[{key}: {val}]")
+
+    if not parts:
+        # Fallback: dump the whole body compactly, capped at 400 chars
+        dumped = json.dumps(body)
+        parts.append(dumped[:400] + ("…" if len(dumped) > 400 else ""))
+
+    return "\n".join(parts)
+
+
 def extract(payload, path):
     """Walk dot-separated path through payload."""
     val = payload
@@ -120,7 +172,11 @@ def process_row(row, steps, base_url, token):
             if skip:
                 continue
 
-            row["_debug_log"].append(f"Step {idx+1} '{label}': GET {full_url} params={list(params.keys())}")
+            param_str_dbg = "&".join(f"{k}={v}" for k, v in params.items())
+            row["_debug_log"].append(
+                f"Step {idx+1} '{label}': GET {full_url}"
+                + (f"?{param_str_dbg}" if param_str_dbg else "")
+            )
 
             resp = fetch_with_retry(full_url, hdrs, params)
             if resp and resp.status_code == 200:
@@ -182,15 +238,14 @@ def process_row(row, steps, base_url, token):
 
             else:
                 code = resp.status_code if resp else "Timeout"
-                msg = ""
-                if resp:
-                    try:
-                        j = resp.json()
-                        msg = j.get("message") or j.get("detail") or ""
-                    except Exception:
-                        msg = resp.text[:120]
-                row["enricher_error"] += f"[{label}: HTTP {code} {msg}] "
-                row["_debug_log"].append(f"Step {idx+1} '{label}': HTTP {code} {msg}")
+                error_body = parse_error_body(resp)
+                # Build full reproducible curl for debug log
+                param_str = "&".join(f"{k}={v}" for k, v in params.items())
+                curl = f"GET {full_url}" + (f"?{param_str}" if param_str else "")
+                row["enricher_error"] += f"[{label}: HTTP {code} — {error_body}] "
+                row["_debug_log"].append(
+                    f"Step {idx+1} '{label}': HTTP {code} | URL: {curl} | Error: {error_body}"
+                )
 
         except Exception as e:
             row["enricher_error"] += f"[{label}: {e}] "
