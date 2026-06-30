@@ -482,6 +482,79 @@ def run():
                     headers={"Cache-Control": "no-cache",
                              "X-Accel-Buffering": "no"})
 
+def bw_get(path, token, params=None):
+    """Generic authenticated GET to BW production API. Returns (data, status_code, error)."""
+    url = f"https://rest.bridgewise.com{path}"
+    hdrs = bw_headers(token)
+    try:
+        r = requests.get(url, headers=hdrs, params=params or {}, timeout=20)
+        if r.status_code == 200:
+            return r.json(), 200, None
+        return None, r.status_code, parse_error_body(r)
+    except Exception as e:
+        return None, 502, str(e)
+
+
+@app.get("/api/tenants")
+def get_tenants():
+    """Return all tenants (name + id) for the dropdown."""
+    token = request.headers.get("X-BW-Token", "").strip()
+    if not token:
+        return jsonify({"error": "Missing X-BW-Token header"}), 401
+    data, code, err = bw_get("/tenants", token, {"size": 200, "page": 1, "show_all": "true"})
+    if err:
+        return jsonify({"error": err}), code
+    # Return just name + id sorted by name
+    tenants = sorted(
+        [{"id": t["id"], "name": t.get("name", t["id"])} for t in (data or [])],
+        key=lambda x: x["name"].lower()
+    )
+    return jsonify(tenants)
+
+
+@app.get("/api/tenant-policy/<tenant_id>")
+def get_tenant_policy(tenant_id):
+    """Return investment-policies-config for a given tenant."""
+    token = request.headers.get("X-BW-Token", "").strip()
+    if not token:
+        return jsonify({"error": "Missing X-BW-Token header"}), 401
+    data, code, err = bw_get(f"/tenants/{tenant_id}/investment-policies-config", token)
+    if err:
+        return jsonify({"error": err}), code
+    return jsonify(data)
+
+
+@app.get("/api/filters")
+def get_filters():
+    """Proxy /instruments/filters — resolves country/exchange/currency IDs to names."""
+    token = request.headers.get("X-BW-Token", "").strip()
+    filter_type = request.args.get("type", "countries")
+    language = request.args.get("language", "en-US")
+    # Filters may be public (no auth needed) but we pass token if provided
+    url = "https://rest.bridgewise.com/instruments/filters"
+    hdrs = {"Accept": "application/json"}
+    if token:
+        hdrs["Authorization"] = f"Bearer {token}"
+    try:
+        r = requests.get(url, headers=hdrs, params={"type": filter_type, "language": language}, timeout=20)
+        return Response(r.content, status=r.status_code, content_type="application/json")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 502
+
+
+@app.get("/api/funds/<int:fund_id>")
+def get_fund(fund_id):
+    """Proxy /instruments/funds/{id} — resolves index/fund ID to a name."""
+    token = request.headers.get("X-BW-Token", "").strip()
+    language = request.args.get("language", "en-US")
+    if not token:
+        return jsonify({"error": "Missing X-BW-Token header"}), 401
+    data, code, err = bw_get(f"/instruments/funds/{fund_id}", token, {"language": language})
+    if err:
+        return jsonify({"error": err}), code
+    return jsonify(data)
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
