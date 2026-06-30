@@ -349,7 +349,12 @@ def process_row(row, steps, base_url, token):
 
 @app.get("/")
 def index():
-    return render_template("index.html")
+    # Use send_from_directory instead of render_template to avoid
+    # Jinja2 trying to parse {{ }} or {# #} patterns in the HTML/JS as template syntax
+    import os
+    from flask import send_from_directory
+    template_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
+    return send_from_directory(template_dir, "index.html")
 
 @app.get("/api/health")
 def health():
@@ -499,23 +504,29 @@ def bw_get(path, token, params=None):
 
 
 def cors_json(data, status=200):
-    """Return a JSON response with CORS headers so the suite can call the Railway proxy."""
+    """Return a JSON response with CORS headers."""
     resp = jsonify(data)
-    resp.status_code = status
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Headers"] = "X-BW-Token, Content-Type"
-    return resp
+    return resp, status
 
 
-@app.before_request
-def handle_options():
-    """Allow CORS preflight for all /api/* routes."""
-    if request.method == "OPTIONS":
-        resp = Response("", status=204)
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-        resp.headers["Access-Control-Allow-Headers"] = "X-BW-Token, Content-Type, Authorization"
-        return resp
+@app.after_request
+def add_cors(response):
+    """Add CORS headers to every response."""
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "X-BW-Token, Content-Type, Authorization"
+    return response
+
+
+@app.route("/api/tenants", methods=["OPTIONS"])
+@app.route("/api/tenant-policy/<tenant_id>", methods=["OPTIONS"])
+@app.route("/api/filters", methods=["OPTIONS"])
+@app.route("/api/funds/<int:fund_id>", methods=["OPTIONS"])
+def handle_options(**kwargs):
+    """Handle CORS preflight."""
+    return "", 204
 
 
 @app.get("/api/tenants")
