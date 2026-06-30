@@ -567,14 +567,40 @@ def get_tenant_policy(tenant_id):
 
 @app.get("/api/filters")
 def get_filters():
-    """Proxy /instruments/filters — resolves country/exchange/currency IDs to names."""
+    """Proxy /instruments/filters — resolves country/exchange/currency IDs to names.
+    The BW API uses singular type names: 'country', 'exchange', 'currency'.
+    We accept both plural and singular from the caller and normalise here.
+    """
     token = request.headers.get("X-BW-Token", "").strip()
     filter_type = request.args.get("type", "countries")
     language = request.args.get("language", "en-US")
+
+    # Normalise: BW uses singular forms
+    type_map = {
+        "countries": "country",
+        "exchanges": "exchange",
+        "currencies": "currency",
+    }
+    bw_type = type_map.get(filter_type, filter_type)
+
     url = "https://rest.bridgewise.com/instruments/filters"
     hdrs = {"Accept": "application/json"}
     if token:
         hdrs["Authorization"] = f"Bearer {token}"
+
+    # Try the normalised singular type first, fall back to original if it fails
+    for try_type in [bw_type, filter_type]:
+        try:
+            r = requests.get(url, headers=hdrs,
+                             params={"type": try_type, "language": language}, timeout=20)
+            if r.status_code == 200:
+                resp = Response(r.content, status=200, content_type="application/json")
+                resp.headers["Access-Control-Allow-Origin"] = "*"
+                return resp
+        except Exception:
+            continue
+
+    # Both failed — return last response or error
     try:
         r = requests.get(url, headers=hdrs,
                          params={"type": filter_type, "language": language}, timeout=20)
