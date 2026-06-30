@@ -489,10 +489,33 @@ def bw_get(path, token, params=None):
     try:
         r = requests.get(url, headers=hdrs, params=params or {}, timeout=20)
         if r.status_code == 200:
-            return r.json(), 200, None
+            try:
+                return r.json(), 200, None
+            except Exception:
+                return r.text, 200, None
         return None, r.status_code, parse_error_body(r)
     except Exception as e:
         return None, 502, str(e)
+
+
+def cors_json(data, status=200):
+    """Return a JSON response with CORS headers so the suite can call the Railway proxy."""
+    resp = jsonify(data)
+    resp.status_code = status
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Headers"] = "X-BW-Token, Content-Type"
+    return resp
+
+
+@app.before_request
+def handle_options():
+    """Allow CORS preflight for all /api/* routes."""
+    if request.method == "OPTIONS":
+        resp = Response("", status=204)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "X-BW-Token, Content-Type, Authorization"
+        return resp
 
 
 @app.get("/api/tenants")
@@ -500,16 +523,23 @@ def get_tenants():
     """Return all tenants (name + id) for the dropdown."""
     token = request.headers.get("X-BW-Token", "").strip()
     if not token:
-        return jsonify({"error": "Missing X-BW-Token header"}), 401
+        return cors_json({"error": "Missing X-BW-Token header"}, 401)
     data, code, err = bw_get("/tenants", token, {"size": 200, "page": 1, "show_all": "true"})
     if err:
-        return jsonify({"error": err}), code
-    # Return just name + id sorted by name
+        return cors_json({"error": err}, code)
+    # BW returns either a plain list or {"data": [...], "total": N}
+    if isinstance(data, dict):
+        items = data.get("data") or data.get("tenants") or data.get("items") or []
+    elif isinstance(data, list):
+        items = data
+    else:
+        items = []
     tenants = sorted(
-        [{"id": t["id"], "name": t.get("name", t["id"])} for t in (data or [])],
+        [{"id": t["id"], "name": t.get("name") or t.get("display_name") or t["id"]}
+         for t in items if isinstance(t, dict) and t.get("id")],
         key=lambda x: x["name"].lower()
     )
-    return jsonify(tenants)
+    return cors_json(tenants)
 
 
 @app.get("/api/tenant-policy/<tenant_id>")
@@ -517,11 +547,11 @@ def get_tenant_policy(tenant_id):
     """Return investment-policies-config for a given tenant."""
     token = request.headers.get("X-BW-Token", "").strip()
     if not token:
-        return jsonify({"error": "Missing X-BW-Token header"}), 401
+        return cors_json({"error": "Missing X-BW-Token header"}, 401)
     data, code, err = bw_get(f"/tenants/{tenant_id}/investment-policies-config", token)
     if err:
-        return jsonify({"error": err}), code
-    return jsonify(data)
+        return cors_json({"error": err}, code)
+    return cors_json(data)
 
 
 @app.get("/api/filters")
@@ -530,16 +560,18 @@ def get_filters():
     token = request.headers.get("X-BW-Token", "").strip()
     filter_type = request.args.get("type", "countries")
     language = request.args.get("language", "en-US")
-    # Filters may be public (no auth needed) but we pass token if provided
     url = "https://rest.bridgewise.com/instruments/filters"
     hdrs = {"Accept": "application/json"}
     if token:
         hdrs["Authorization"] = f"Bearer {token}"
     try:
-        r = requests.get(url, headers=hdrs, params={"type": filter_type, "language": language}, timeout=20)
-        return Response(r.content, status=r.status_code, content_type="application/json")
+        r = requests.get(url, headers=hdrs,
+                         params={"type": filter_type, "language": language}, timeout=20)
+        resp = Response(r.content, status=r.status_code, content_type="application/json")
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
     except Exception as e:
-        return jsonify({"error": str(e)}), 502
+        return cors_json({"error": str(e)}, 502)
 
 
 @app.get("/api/funds/<int:fund_id>")
@@ -548,11 +580,11 @@ def get_fund(fund_id):
     token = request.headers.get("X-BW-Token", "").strip()
     language = request.args.get("language", "en-US")
     if not token:
-        return jsonify({"error": "Missing X-BW-Token header"}), 401
+        return cors_json({"error": "Missing X-BW-Token header"}, 401)
     data, code, err = bw_get(f"/instruments/funds/{fund_id}", token, {"language": language})
     if err:
-        return jsonify({"error": err}), code
-    return jsonify(data)
+        return cors_json({"error": err}, code)
+    return cors_json(data)
 
 
 if __name__ == "__main__":
